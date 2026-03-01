@@ -13,6 +13,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="KSA">
       <HintPath>$(KSAFolder)\KSA.dll</HintPath>
     </Reference>
