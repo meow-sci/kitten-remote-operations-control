@@ -2,7 +2,9 @@
 
 Derived from [../rfcs/SERVER_RFC.md](../rfcs/SERVER_RFC.md).
 
-**Scope:** Get the ASP.NET Core Kestrel server running inside the mod process with a single proof-of-life endpoint. Game feature endpoints are out of scope and will be planned separately.
+**Scope:** Get the GenHTTP server running embedded inside the mod process with a single proof-of-life endpoint. Game feature endpoints are out of scope and will be planned separately.
+
+> ASP.NET Core / Kestrel cannot be used due to conflicts with KSA game assembly loading. GenHTTP (`GenHTTP.Core`) is used instead — a lightweight, embeddable .NET HTTP server with no ASP.NET Core dependency.
 
 Tasks within a phase may be parallelised; tasks in a later phase depend on all prior phases being complete.
 
@@ -10,19 +12,24 @@ Tasks within a phase may be parallelised; tasks in a later phase depend on all p
 
 ## Phase 1 — Project Setup
 
-### Task 1.1 — Add ASP.NET Core framework reference to `server.csproj`
+### Task 1.1 — Add GenHTTP NuGet packages to `server.csproj`
 
 **File:** `server/server.csproj`
 
-The project uses `Sdk="Microsoft.NET.Sdk"` (not `Microsoft.NET.Sdk.Web`), so the ASP.NET Core shared framework is not automatically available. Add a `FrameworkReference` (not a `PackageReference`) to make Kestrel and Minimal API types available at compile time:
+Remove any `FrameworkReference` to `Microsoft.AspNetCore.App`. Add `PackageReference` entries for GenHTTP:
 
 ```xml
 <ItemGroup>
-  <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  <PackageReference Include="GenHTTP.Core" Version="10.5.0" />
+  <PackageReference Include="GenHTTP.Modules.Functional" Version="10.5.0" />
+  <PackageReference Include="GenHTTP.Modules.Layouting" Version="10.5.0" />
+  <PackageReference Include="GenHTTP.Modules.Practices" Version="10.5.0" />
+  <PackageReference Include="GenHTTP.Modules.Security" Version="10.5.0" />
+  <PackageReference Include="GenHTTP.Modules.ErrorHandling" Version="10.5.0" />
 </ItemGroup>
 ```
 
-**Acceptance:** `dotnet build server/server.csproj` succeeds and `Microsoft.AspNetCore.Builder.WebApplication` is resolvable in `server/` source files.
+**Acceptance:** `dotnet build server/server.csproj` succeeds and `GenHTTP.Engine.Internal.Host` is resolvable in `server/` source files.
 
 ---
 
@@ -78,23 +85,23 @@ Add a private static helper `WriteDefaultToml(string tomlPath)` that:
 **Namespace:** `KROC.Server`
 
 ```csharp
-using Microsoft.AspNetCore.Routing;
+using GenHTTP.Modules.Layouting;
 
 namespace KROC.Server;
 
 /// <summary>
-/// Implemented by feature projects to register Minimal API routes.
-/// Called once during server startup before app.StartAsync().
+/// Implemented by feature projects to register routes on a GenHTTP layout.
+/// Called once during server startup before host.StartAsync().
 /// </summary>
 public interface IEndpointModule
 {
-    void Register(IEndpointRouteBuilder routes);
+    void Register(LayoutBuilder routes);
 }
 ```
 
-Feature modules receive `IEndpointRouteBuilder` — the standard ASP.NET Core abstraction implemented by `WebApplication` — and call `MapGet`/`MapPost`/etc. directly on it.
+Feature modules receive a `LayoutBuilder` — GenHTTP's routing container — and call `.Add("path", handler)` or use `Inline.Create()` / `AddService<T>()` to register their handlers.
 
-**Acceptance:** Interface compiles. A class implementing it in another project that only references `KROC.Server` compiles without needing a direct ASP.NET Core reference.
+**Acceptance:** Interface compiles. A class implementing it in another project that only references `KROC.Server` compiles without needing additional GenHTTP packages (the transitive dependency from `server.csproj` provides them).
 
 ---
 
@@ -105,7 +112,7 @@ Feature modules receive `IEndpointRouteBuilder` — the standard ASP.NET Core ab
 **File:** `server/KrocServer.cs`  
 **Namespace:** `KROC.Server`
 
-`KrocServer` owns the `WebApplication` instance. It is the only type the mod project needs to interact with.
+`KrocServer` owns the `IServerHost` instance. It is the only type the mod project needs to interact with.
 
 **Constructor:**
 ```csharp
@@ -114,34 +121,44 @@ public KrocServer(KrocServerConfig config, IReadOnlyList<IEndpointModule> module
 
 **Public surface:**
 ```csharp
-public Task StartAsync(CancellationToken ct = default);
-public Task StopAsync(CancellationToken ct = default);
+public Task StartAsync();
+public Task StopAsync();
 ```
 
 **`StartAsync` steps:**
 1. If `config.Enabled == false`, log to `Console` and return immediately.
-2. `var builder = WebApplication.CreateSlimBuilder()` — do **not** use `CreateBuilder()`.
-3. `builder.WebHost.UseUrls($"http://{config.BindHost}:{config.Port}")`.
-4. Configure JSON options:
+2. Build the root handler layout:
    ```csharp
-   builder.Services.ConfigureHttpJsonOptions(opts =>
-   {
-       opts.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-       opts.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
-   });
+   var api = Layout.Create();
    ```
-5. `var app = builder.Build()`.
-6. Add inline CORS middleware via `app.Use(...)` — write `Access-Control-Allow-Origin: *`, `Access-Control-Allow-Headers: *`, `Access-Control-Allow-Methods: *` on every response; short-circuit `OPTIONS` requests with `200`.
-7. Add inline exception middleware via `app.Use(...)` — catch unhandled exceptions from downstream, log to `Console`, and write `{ "error": "<message>" }` with status `500` and `Content-Type: application/json`.
-8. Register the `/ping` endpoint (see Task 3.2).
-9. Iterate `modules`, calling `module.Register(app)` for each.
-10. `await app.StartAsync(ct)`, store `app` for `StopAsync`.
+3. Register the `/ping` endpoint inline (see Task 3.2).
+4. Add CORS support:
+   ```csharp
+   api.Add(CorsPolicy.Permissive());
+   ```
+5. Add custom error handling concern for JSON error responses:
+   ```csharp
+   api.Add(ErrorHandler.From(new JsonErrorMapper()));
+   ```
+6. Iterate `modules`, calling `module.Register(api)` for each.
+7. Build and start the server:
+   ```csharp
+   var host = await Host.Create()
+       .Handler(api)
+       .Bind(IPAddress.Parse(config.BindHost), (ushort)config.Port)
+       .Defaults()
+       .StartAsync();
+   ```
+8. Store `host` for `StopAsync`.
 
 **`StopAsync` steps:**
-1. If the app was never started, return immediately.
-2. `await app.StopAsync(ct)`.
-3. `await app.DisposeAsync()`.
-4. Null the stored reference.
+1. If the host was never started, return immediately.
+2. `await _host.StopAsync()`.
+3. Null the stored reference.
+
+**`JsonErrorMapper`** — a private nested class implementing `IErrorMapper<Exception>`:
+- `GetNotFound` returns a JSON response `{ "error": "not found" }` with status 404.
+- `Map` logs the exception to `Console` and returns `{ "error": "<message>" }` with status 500.
 
 **Acceptance:** `StartAsync` runs without throwing; `StopAsync` returns cleanly.
 
@@ -149,13 +166,16 @@ public Task StopAsync(CancellationToken ct = default);
 
 ### Task 3.2 — Add `/ping` endpoint
 
-Registered directly in `KrocServer.StartAsync` step 8, not in a module:
+Registered directly in `KrocServer.StartAsync` step 3 via `Inline`:
 
 ```csharp
-app.MapGet("/ping", () => Results.Ok(new { status = "ok" }));
+var ping = Inline.Create()
+                 .Get(() => new { status = "ok" });
+
+api.Add("ping", ping);
 ```
 
-**Acceptance:** `curl http://localhost:6969/ping` returns `{"status":"ok"}` with HTTP 200 while the mod is loaded.
+**Acceptance:** `curl http://localhost:7887/ping` returns `{"status":"ok"}` with HTTP 200 while the mod is loaded.
 
 ---
 
@@ -199,19 +219,20 @@ app.MapGet("/ping", () => Results.Ok(new { status = "ok" }));
 
 **File:** `mod/mod.csproj`
 
-Inside the existing `CopyCustomContent` MSBuild target, add wildcard copy items for the ASP.NET Core assemblies that appear in `$(TargetDir)` as a result of the `FrameworkReference`:
+1. **Remove** the `FrameworkReference` to `Microsoft.AspNetCore.App`.
+2. **Remove** the wildcard copy items for `Microsoft.AspNetCore.*.dll` and `Microsoft.Extensions.Hosting*.dll`.
+3. **Add** wildcard copy items for GenHTTP assemblies that appear in `$(TargetDir)`:
 
 ```xml
 <ItemGroup>
-  <AspNetCoreAssemblies Include="$(TargetDir)Microsoft.AspNetCore.*.dll" />
-  <AspNetCoreAssemblies Include="$(TargetDir)Microsoft.Extensions.Hosting*.dll" />
+  <GenHttpAssemblies Include="$(TargetDir)GenHTTP.*.dll" />
 </ItemGroup>
-<Copy SourceFiles="@(AspNetCoreAssemblies)"
+<Copy SourceFiles="@(GenHttpAssemblies)"
       DestinationFolder="$(DistDir)"
-      Condition="'@(AspNetCoreAssemblies)' != ''" />
+      Condition="'@(GenHttpAssemblies)' != ''" />
 ```
 
-**Acceptance:** After `dotnet build mod/mod.csproj`, the dist folder contains the Kestrel and ASP.NET Core extension assemblies alongside the mod DLL.
+**Acceptance:** After `dotnet build mod/mod.csproj`, the dist folder contains the GenHTTP assemblies alongside the mod DLL. No `Microsoft.AspNetCore.*` assemblies are present.
 
 ---
 
@@ -219,5 +240,6 @@ Inside the existing `CopyCustomContent` MSBuild target, add wildcard copy items 
 
 - **No implicit usings:** `ImplicitUsings` is disabled in `Directory.Build.props`. All files need explicit `using` directives.
 - **Nullable:** `<Nullable>enable</Nullable>` and `<TreatWarningsAsErrors>true</TreatWarningsAsErrors>` are set globally. All public APIs must be fully annotated.
-- **Thread safety:** Kestrel handlers run on the thread pool. Any future handler that touches KSA game state must marshal to the game's main thread. This is not required for `/ping` but is a hard constraint for all subsequent feature endpoint work.
+- **Thread safety:** GenHTTP handlers run on the thread pool. Any future handler that touches KSA game state must marshal to the game's main thread. This is not required for `/ping` but is a hard constraint for all subsequent feature endpoint work.
+- **No ASP.NET Core dependency:** Neither the `server` project nor any feature module project should reference `Microsoft.AspNetCore.App`. All HTTP concerns are handled by GenHTTP packages.
 

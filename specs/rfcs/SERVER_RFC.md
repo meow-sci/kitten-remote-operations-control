@@ -15,19 +15,21 @@ The top-level mod will need to instantiate and start the HTTP server and then re
 
 The server project must provide a very simple interface to accomplish this, encapsulating complexity of implementation details inside itself.
 
+> **Note:** ASP.NET Core / Kestrel cannot be used due to conflicts with how KSA loads game assemblies and manages the host process. **GenHTTP** (`GenHTTP.Core`) is used instead — it is a lightweight, embeddable .NET HTTP server with no dependency on the ASP.NET Core shared framework.
+
 # Features
 
 ## Server Infrastructure
 
-- HTTP server implemented using **ASP.NET Core Kestrel** (`Microsoft.AspNetCore.Server.Kestrel`) running as a self-hosted `WebApplication` inside the mod process
-- Routes are defined using the **ASP.NET Core Minimal API** style (`app.MapGet`, `app.MapPost`, etc.)
-- Configurable bind address and listener port via `WebApplication.Urls`, e.g. `http://localhost:6969`
-- Server is built with `WebApplication.CreateSlimBuilder()` to minimize overhead and avoid unnecessary middleware
-- Server lifecycle tied to the mod lifecycle: `WebApplication` started (via `app.StartAsync()`) in `OnFullyLoaded`, stopped (via `app.StopAsync()`) and disposed in `Unload`
-- The `WebApplication` instance, along with its `IServiceProvider`, is owned by the server project and not exposed directly to feature modules
-- Handlers receive `HttpContext` and return `IResult` or write directly to `HttpContext.Response`; all async I/O is naturally handled by the Kestrel pipeline
+- HTTP server implemented using **GenHTTP** (`GenHTTP.Core` NuGet package) running embedded inside the mod process
+- Routes are defined using the **GenHTTP Functional Handlers** (`Inline.Create()`) and **Layout** (`Layout.Create()`) APIs, or the **Webservice** framework (`AddService<T>`) for class-based handlers
+- Configurable bind address and listener port via `Host.Create().Bind(address, port)`, e.g. `http://0.0.0.0:7887`
+- Server is built with `Host.Create()` using the internal (non-Kestrel) engine to minimize overhead and avoid any ASP.NET Core dependency
+- Server lifecycle tied to the mod lifecycle: server started (via `host.StartAsync()`) in `OnFullyLoaded`, stopped (via `host.StopAsync()`) in `Unload`
+- The `IServerHost` instance is owned by the server project and not exposed directly to feature modules; feature modules receive a `LayoutBuilder` to register their routes
+- Handler methods receive injected parameters (query, path, body) and return POCOs (serialized as JSON automatically) or `IResponseBuilder` for custom responses
 - Handlers must marshal game state reads back to the game's main thread where required (game APIs are not thread-safe)
-- Request and response bodies serialized as JSON using the `System.Text.Json` source generator configured on the slim builder; a shared `JsonSerializerOptions` instance (camelCase, ignore nulls) is provided by the server project
+- Request and response bodies serialized as JSON using `System.Text.Json` via GenHTTP's built-in serialization; a shared `JsonSerializerOptions` instance (camelCase, ignore nulls) may be configured through the serialization module
 
 ## Configuration
 
@@ -47,17 +49,15 @@ The server project must provide a very simple interface to accomplish this, enca
 
 - Bind to `localhost` only by default; exposing to the network is opt-in via config
 - No authentication is implemented in v1; operators exposing the port beyond localhost are responsible for their own firewall rules
-- CORS headers added to all responses to allow browser-based clients (`Access-Control-Allow-Origin: *`)
+- CORS headers added to all responses to allow browser-based clients via `CorsPolicy.Permissive()` from `GenHTTP.Modules.Security`
 
 ## Real-time Telemetry (Server-Sent Events)
 
 - A `/events` SSE endpoint streams game state updates at a configurable tick rate (default ~10 Hz)
-- Implemented as a Minimal API endpoint that sets `Content-Type: text/event-stream` and writes `data: ...
-
-` frames directly to `HttpContext.Response.Body`
-- Clients subscribe by connecting with `Accept: text/event-stream`; Kestrel keeps the connection open for the lifetime of the stream
-- Each event carries a named type written as `event: <name>\ndata: <json>\n\n`, e.g. `telemetry`, `orbit`, `resources`
-- The server project provides a broadcaster utility (`SseBroadcaster`) that feature modules push named event payloads into; the broadcaster fans out to all active SSE response streams
-- `CancellationToken` from `HttpContext.RequestAborted` is used to detect client disconnects and remove the stream from the broadcaster
-- Clean mod shutdown calls `app.StopAsync()`, which cancels all in-flight SSE responses via the host shutdown token
+- Implemented using `GenHTTP.Modules.ServerSentEvents` — an `EventSource.Create().Generator(...)` handler registered on the layout
+- Clients subscribe by connecting; GenHTTP keeps the connection open for the lifetime of the stream
+- Each event carries a named type via `connection.DataAsync(payload, eventType: "telemetry")`, e.g. `telemetry`, `orbit`, `resources`
+- The server project provides a broadcaster utility (`SseBroadcaster`) that feature modules push named event payloads into; the broadcaster fans out to all active SSE connections via their `IEventConnection`
+- `IEventConnection.Connected` is used to detect client disconnects and remove the connection from the broadcaster
+- Clean mod shutdown calls `host.StopAsync()`, which terminates all in-flight SSE connections
 
