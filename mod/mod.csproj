@@ -12,6 +12,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+
     <ProjectReference Include="..\core\core.csproj" />
     <ProjectReference Include="..\server\server.csproj" />
     <ProjectReference Include="..\feat-ping\feat-ping.csproj" />
@@ -40,12 +41,11 @@
     <Copy SourceFiles="$(TargetDir)Tomlyn.dll" DestinationFolder="$(DistDir)" />
 
     <ItemGroup>
-      <AspNetCoreAssemblies Include="$(TargetDir)Microsoft.AspNetCore.*.dll" />
-      <AspNetCoreAssemblies Include="$(TargetDir)Microsoft.Extensions.Hosting*.dll" />
+      <GenHttpAssemblies Include="$(TargetDir)GenHTTP.*.dll" />
     </ItemGroup>
-    <Copy SourceFiles="@(AspNetCoreAssemblies)"
+    <Copy SourceFiles="@(GenHttpAssemblies)"
           DestinationFolder="$(DistDir)"
-          Condition="'@(AspNetCoreAssemblies)' != ''" />
+          Condition="'@(GenHttpAssemblies)' != ''" />
   </Target>
 
   <ItemGroup>

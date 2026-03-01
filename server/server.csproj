@@ -6,6 +6,7 @@
     <RootNamespace>KROC.Server</RootNamespace>
     <Description>Server for KROC</Description>
     <PackageId>KROC.Server</PackageId>
+    <PrunePackageReference>false</PrunePackageReference>
   </PropertyGroup>
 
   <ItemGroup>
@@ -13,7 +14,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <PackageReference Include="GenHTTP.Core" Version="10.5.0" />
+    <PackageReference Include="GenHTTP.Modules.Functional" Version="10.5.0" />
+    <PackageReference Include="GenHTTP.Modules.Layouting" Version="10.5.0" />
+    <PackageReference Include="GenHTTP.Modules.Practices" Version="10.5.0" />
+    <PackageReference Include="GenHTTP.Modules.Security" Version="10.5.0" />
+    <PackageReference Include="GenHTTP.Modules.ErrorHandling" Version="10.5.0" />
   </ItemGroup>
 
   <ItemGroup>
