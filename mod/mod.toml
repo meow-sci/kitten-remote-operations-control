@@ -1,0 +1,9 @@
+name = "kroc"
+description = "kitten remote operations control"
+version = "1.0.0"
+author = "meow sci"
+
+# Once https://github.com/StarMapLoader/StarMap/tree/feature/mod-dependencies/StarMap.API
+# (the mod-dependencies) branch is merged, we can re-enable this.
+[StarMap]
+EntryAssembly = "KROC.Mod"

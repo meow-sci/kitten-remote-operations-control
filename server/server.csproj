@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>KROC.Server</AssemblyName>
+    <RootNamespace>KROC.Server</RootNamespace>
+    <Description>Server for KROC</Description>
+    <PackageId>KROC.Server</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\core\core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="KSA">
+      <HintPath>$(KSAFolder)\KSA.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

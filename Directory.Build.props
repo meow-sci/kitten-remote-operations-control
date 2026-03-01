@@ -1,0 +1,40 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>13.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- <ImplicitUsings>enable</ImplicitUsings> -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <WarningsAsErrors />
+    <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <Product>KROC</Product>
+    <Company>meow sci</Company>
+    <Copyright>Copyright © meow sci</Copyright>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <DebugType>full</DebugType>
+    <DebugSymbols>true</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <DefineConstants>TRACE</DefineConstants>
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <KSAFolder Condition="'$(KSAFolder)' == ''">C:\Program Files\Kitten Space Agency\</KSAFolder>
+    <KSAUserDir Condition="'$(KSAUserDir)' == ''">$(USERPROFILE)\Documents\My Games\Kitten Space Agency\</KSAUserDir>
+    <KSAUserModDir>$(KSAUserDir)\mods\</KSAUserModDir>
+    <KSAProgramFilesModDir>C:\Program Files\Kitten Space Agency\Content\</KSAProgramFilesModDir>
+    <SelectedDistModDir>$(KSAProgramFilesModDir)</SelectedDistModDir>
+
+    <!-- StarMap not yet working with user mods directory -->
+    <!-- <SelectedDistModDir>$(KSAUserModDir)</SelectedDistModDir> -->
+  </PropertyGroup>
+</Project>

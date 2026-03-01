@@ -1,0 +1,13 @@
+<Solution>
+
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+
+  <Project Path="core/core.csproj" />
+  <Project Path="server/server.csproj" />
+  <Project Path="mod/mod.csproj" />
+
+</Solution>

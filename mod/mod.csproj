@@ -1,0 +1,92 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>KROC.Mod</AssemblyName>
+    <RootNamespace>KROC.Mod</RootNamespace>
+    <Description>kitten remote operations control</Description>
+    <PackageId>KROC.Mod</PackageId>
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+    <DistDir>$(SelectedDistModDir)\kitten-remote-operations-control\</DistDir>
+    <PackageLicenseFile>LICENSE.txt</PackageLicenseFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\core\core.csproj" />
+    <ProjectReference Include="..\server\server.csproj" />
+  </ItemGroup>
+
+  <!-- Copies files for mod deployment -->
+  <Target Name="CopyCustomContent" AfterTargets="AfterBuild">
+    <MakeDir Directories="$(DistDir)" />
+    <Copy SourceFiles="$(TargetDir)LICENSE.txt" DestinationFolder="$(DistDir)"
+      Condition="Exists('$(TargetDir)LICENSE.txt')" />
+    <Copy SourceFiles="$(TargetDir)mod.toml" DestinationFolder="$(DistDir)"
+      Condition="Exists('$(TargetDir)mod.toml')" />
+    <!-- <Copy SourceFiles="$(ProjectDepsFilePath)" DestinationFolder="$(DistDir)"
+    Condition="Exists('$(ProjectDepsFilePath)')"/> -->
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(DistDir)"
+      Condition="Exists('$(TargetPath)')" />
+    <Copy SourceFiles="$(TargetDir)KROC.Mod.pdb" DestinationFolder="$(DistDir)" />
+
+    <Copy SourceFiles="$(TargetDir)KROC.Core.dll" DestinationFolder="$(DistDir)" />
+    <Copy SourceFiles="$(TargetDir)KROC.Core.pdb" DestinationFolder="$(DistDir)" />
+    <Copy SourceFiles="$(TargetDir)KROC.Server.dll" DestinationFolder="$(DistDir)" />
+    <Copy SourceFiles="$(TargetDir)KROC.Server.pdb" DestinationFolder="$(DistDir)" />
+
+    <Copy SourceFiles="$(TargetDir)Tomlyn.dll" DestinationFolder="$(DistDir)" />
+  </Target>
+
+  <ItemGroup>
+    <!-- Copies mod.toml to the output dir -->
+    <None Update="mod.toml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Include="LICENSE.txt">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Nuget package references -->
+    <PackageReference Include="Lib.Harmony" Version="2.4.2">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="StarMap.API" Version="0.3.6">
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- KSA DLL references -->
+    <Reference Include="Brutal.Core.Common"
+      Condition="Exists('$(KSAFolder)/Brutal.Core.Common.dll')">
+      <HintPath>$(KSAFolder)/Brutal.Core.Common.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Numerics"
+      Condition="Exists('$(KSAFolder)/Brutal.Core.Numerics.dll')">
+      <HintPath>$(KSAFolder)/Brutal.Core.Numerics.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.ImGui" Condition="Exists('$(KSAFolder)/Brutal.ImGui.dll')">
+      <HintPath>$(KSAFolder)/Brutal.ImGui.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.ImGui.Abstractions"
+      Condition="Exists('$(KSAFolder)/Brutal.ImGui.Abstractions.dll')">
+      <HintPath>$(KSAFolder)/Brutal.ImGui.Abstractions.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Glfw" Condition="Exists('$(KSAFolder)/Brutal.Glfw.dll')">
+      <HintPath>$(KSAFolder)/Brutal.Glfw.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="KSA" Condition="Exists('$(KSAFolder)/KSA.dll')">
+      <HintPath>$(KSAFolder)/KSA.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+</Project>
