@@ -1,6 +1,7 @@
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Routing;
+using GenHTTP.Api.Protocol;
+using GenHTTP.Modules.Functional;
+using GenHTTP.Modules.IO;
+using GenHTTP.Modules.Layouting.Provider;
 using KROC.Server;
 
 namespace KROC.FeatPing;
@@ -10,8 +11,15 @@ namespace KROC.FeatPing;
 /// </summary>
 public sealed class PingModule : IEndpointModule
 {
-    public void Register(IEndpointRouteBuilder routes)
+    public void Register(LayoutBuilder routes)
     {
-        routes.MapGet("/pong", () => Results.Text("pong", "text/plain"));
+        var pong = Inline.Create()
+                         .Get((IRequest request) =>
+                             request.Respond()
+                                    .Content("pong")
+                                    .Type(FlexibleContentType.Get(ContentType.TextPlain))
+                                    .Build());
+
+        routes.Add("pong", pong);
     }
 }

@@ -1,21 +1,26 @@
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using System.Threading;
+using System.Net;
 using System.Threading.Tasks;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
+using GenHTTP.Api.Content;
+using GenHTTP.Api.Infrastructure;
+using GenHTTP.Api.Protocol;
+using GenHTTP.Engine.Internal;
+using GenHTTP.Modules.ErrorHandling;
+using GenHTTP.Modules.Functional;
+using GenHTTP.Modules.IO;
+using GenHTTP.Modules.Layouting;
+using GenHTTP.Modules.Practices;
+using GenHTTP.Modules.Security;
 
 namespace KROC.Server;
 
-/// <summary>Minimal ASP.NET Core server that hosts KROC endpoint modules.</summary>
+/// <summary>GenHTTP server that hosts KROC endpoint modules.</summary>
 public sealed class KrocServer
 {
     private readonly KrocServerConfig _config;
     private readonly IReadOnlyList<IEndpointModule> _modules;
-    private WebApplication? _app;
+    private IServerHost? _host;
 
     public KrocServer(KrocServerConfig config, IReadOnlyList<IEndpointModule> modules)
     {
@@ -23,7 +28,7 @@ public sealed class KrocServer
         _modules = modules;
     }
 
-    public async Task StartAsync(CancellationToken ct = default)
+    public async Task StartAsync()
     {
         if (!_config.Enabled)
         {
@@ -31,61 +36,71 @@ public sealed class KrocServer
             return;
         }
 
-        var builder = WebApplication.CreateSlimBuilder();
+        var api = Layout.Create();
 
-        builder.Services.ConfigureHttpJsonOptions(opts =>
-        {
-            opts.SerializerOptions.PropertyNamingPolicy = JsonNamingPolicy.CamelCase;
-            opts.SerializerOptions.DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull;
-        });
+        // /ping — proof-of-life
+        var ping = Inline.Create()
+                         .Get(() => new { status = "ok" });
+        api.Add("ping", ping);
 
-        var app = builder.Build();
-        app.Urls.Add($"http://{_config.BindHost}:{_config.Port}");
+        // CORS — allow all origins
+        api.Add(CorsPolicy.Permissive());
 
-        app.Use(async (context, next) =>
-        {
-            context.Response.Headers["Access-Control-Allow-Origin"] = "*";
-            context.Response.Headers["Access-Control-Allow-Headers"] = "*";
-            context.Response.Headers["Access-Control-Allow-Methods"] = "*";
-            if (HttpMethods.IsOptions(context.Request.Method))
-            {
-                context.Response.StatusCode = 200;
-                return;
-            }
-            await next(context);
-        });
+        // JSON error responses
+        api.Add(ErrorHandler.From(new JsonErrorMapper()));
 
-        app.Use(async (context, next) =>
-        {
-            try
-            {
-                await next(context);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"KROC: unhandled exception in request: {ex}");
-                context.Response.StatusCode = 500;
-                context.Response.ContentType = "application/json";
-                await context.Response.WriteAsync($"{{\"error\":\"{ex.Message}\"}}");
-            }
-        });
-
-        app.MapGet("/ping", () => Results.Ok(new { status = "ok" }));
-
+        // Feature modules
         foreach (var module in _modules)
-            module.Register(app);
+            module.Register(api);
 
-        await app.StartAsync(ct);
-        _app = app;
+        _host = await Host.Create()
+                          .Handler(api)
+                          .Bind(IPAddress.Parse(_config.BindHost), (ushort)_config.Port)
+                          .Defaults()
+                          .StartAsync();
+
+        Console.WriteLine($"KROC: server listening on http://{_config.BindHost}:{_config.Port}");
     }
 
-    public async Task StopAsync(CancellationToken ct = default)
+    public async Task StopAsync()
     {
-        if (_app is null)
+        if (_host is null)
             return;
 
-        await _app.StopAsync(ct);
-        await _app.DisposeAsync();
-        _app = null;
+        await _host.StopAsync();
+        _host = null;
+
+        Console.WriteLine("KROC: server stopped.");
+    }
+
+    /// <summary>Maps exceptions and 404s to JSON responses.</summary>
+    private sealed class JsonErrorMapper : IErrorMapper<Exception>
+    {
+        public ValueTask<IResponse?> GetNotFound(IRequest request, IHandler handler)
+        {
+            var response = request.Respond()
+                                  .Status(ResponseStatus.NotFound)
+                                  .Content("{\"error\":\"not found\"}")
+                                  .Type(FlexibleContentType.Get(ContentType.ApplicationJson))
+                                  .Build();
+            return new ValueTask<IResponse?>(response);
+        }
+
+        public ValueTask<IResponse?> Map(IRequest request, IHandler handler, Exception error)
+        {
+            Console.WriteLine($"KROC: unhandled exception in request: {error}");
+
+            var status = error is ProviderException pe
+                ? pe.Status
+                : ResponseStatus.InternalServerError;
+
+            var escaped = error.Message.Replace("\\", "\\\\").Replace("\"", "\\\"");
+            var response = request.Respond()
+                                  .Status(status)
+                                  .Content($"{{\"error\":\"{escaped}\"}}")
+                                  .Type(FlexibleContentType.Get(ContentType.ApplicationJson))
+                                  .Build();
+            return new ValueTask<IResponse?>(response);
+        }
     }
 }
