@@ -1,8 +1,11 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using Brutal.Numerics;
 using Brutal.ImGuiApi;
 using StarMap.API;
 using KSA;
+using KROC.Server;
 
 namespace KROC;
 
@@ -14,6 +17,7 @@ public class Mod
   private bool _isInitialized = false;
   private bool _isDisposed = false;
   private bool _windowVisible = false;
+  private KrocServer? _server;
 
 
   [StarMapImmediateLoad]
@@ -25,6 +29,9 @@ public class Mod
     try
     {
       Patcher.Patch();
+      var config = KrocServerConfig.LoadFromToml(GetConfigPath());
+      _server = new KrocServer(config, new List<IEndpointModule>());
+      _ = _server.StartAsync();
       _isInitialized = true;
     }
     catch (Exception ex)
@@ -61,6 +68,11 @@ public class Mod
     try
     {
       Patcher.Unload();
+      if (_server != null)
+      {
+        try { _server.StopAsync().GetAwaiter().GetResult(); }
+        catch (Exception stopEx) { Console.WriteLine($"KROC: error stopping server: {stopEx.Message}"); }
+      }
       _isDisposed = true;
     }
     catch (Exception ex)
@@ -101,6 +113,12 @@ public class Mod
       }
     }
     ImGui.End();
+  }
+
+  private static string GetConfigPath()
+  {
+    var myDocuments = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+    return Path.Combine(myDocuments, "My Games", "Kitten Space Agency", "kroc.toml");
   }
 }
 
