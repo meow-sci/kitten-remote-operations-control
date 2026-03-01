@@ -35,6 +35,14 @@
     <Copy SourceFiles="$(TargetDir)KROC.Server.pdb" DestinationFolder="$(DistDir)" />
 
     <Copy SourceFiles="$(TargetDir)Tomlyn.dll" DestinationFolder="$(DistDir)" />
+
+    <ItemGroup>
+      <AspNetCoreAssemblies Include="$(TargetDir)Microsoft.AspNetCore.*.dll" />
+      <AspNetCoreAssemblies Include="$(TargetDir)Microsoft.Extensions.Hosting*.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(AspNetCoreAssemblies)"
+          DestinationFolder="$(DistDir)"
+          Condition="'@(AspNetCoreAssemblies)' != ''" />
   </Target>
 
   <ItemGroup>
