@@ -9,5 +9,6 @@
   <Project Path="core/core.csproj" />
   <Project Path="server/server.csproj" />
   <Project Path="mod/mod.csproj" />
+  <Project Path="feat-ping/feat-ping.csproj" />
 
 </Solution>

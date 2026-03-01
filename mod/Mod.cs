@@ -6,6 +6,7 @@ using Brutal.ImGuiApi;
 using StarMap.API;
 using KSA;
 using KROC.Server;
+using KROC.FeatPing;
 
 namespace KROC;
 
@@ -30,7 +31,10 @@ public class Mod
     {
       Patcher.Patch();
       var config = KrocServerConfig.LoadFromToml(GetConfigPath());
-      _server = new KrocServer(config, new List<IEndpointModule>());
+      _server = new KrocServer(config, new List<IEndpointModule>
+      {
+        new PingModule(),
+      });
       _ = _server.StartAsync();
       _isInitialized = true;
     }
