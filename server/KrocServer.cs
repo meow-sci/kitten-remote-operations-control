@@ -12,6 +12,7 @@ using GenHTTP.Modules.IO;
 using GenHTTP.Modules.Layouting;
 using GenHTTP.Modules.Practices;
 using GenHTTP.Modules.Security;
+using IPAddress = System.Net.IPAddress;
 
 namespace KROC.Server;
 
@@ -56,7 +57,9 @@ public sealed class KrocServer
         _host = await Host.Create()
                           .Handler(api)
                           .Bind(IPAddress.Parse(_config.BindHost), (ushort)_config.Port)
-                          .Defaults()
+                          .Defaults(compression: false)
+                          .Console()
+                          .Development()
                           .StartAsync();
 
         Console.WriteLine($"KROC: server listening on http://{_config.BindHost}:{_config.Port}");

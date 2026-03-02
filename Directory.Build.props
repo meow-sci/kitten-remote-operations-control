@@ -13,6 +13,7 @@
     <Product>KROC</Product>
     <Company>meow sci</Company>
     <Copyright>Copyright © meow sci</Copyright>
+    <PrunePackageReference>false</PrunePackageReference>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
@@ -32,9 +33,9 @@
     <KSAUserDir Condition="'$(KSAUserDir)' == ''">$(USERPROFILE)\Documents\My Games\Kitten Space Agency\</KSAUserDir>
     <KSAUserModDir>$(KSAUserDir)\mods\</KSAUserModDir>
     <KSAProgramFilesModDir>C:\Program Files\Kitten Space Agency\Content\</KSAProgramFilesModDir>
-    <SelectedDistModDir>$(KSAProgramFilesModDir)</SelectedDistModDir>
+    <!-- <SelectedDistModDir>$(KSAProgramFilesModDir)</SelectedDistModDir> -->
 
     <!-- StarMap not yet working with user mods directory -->
-    <!-- <SelectedDistModDir>$(KSAUserModDir)</SelectedDistModDir> -->
+    <SelectedDistModDir>$(KSAUserModDir)</SelectedDistModDir>
   </PropertyGroup>
 </Project>
