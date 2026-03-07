@@ -210,6 +210,7 @@ Every endpoint a feature exposes **must** be reflected in `kroc-spec.yml` at the
 - Add a path entry for each new route.
 - Use `$ref` to shared response schemas where possible.
 - Keep the spec in sync: update it in the same commit as the feature code.
+- Add a row to `FEATURES.md` for each new endpoint.
 
 ## Checklist
 
@@ -220,3 +221,4 @@ Every endpoint a feature exposes **must** be reflected in `kroc-spec.yml` at the
 - [ ] Game calls wrapped in try/catch
 - [ ] Module registered in `Mod.cs`
 - [ ] Endpoint(s) documented in `kroc-spec.yml`
+- [ ] Feature endpoint(s) added to `FEATURES.md`
