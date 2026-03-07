@@ -18,7 +18,7 @@
 
 ---
 
-## [ ] Task 1: List All Vehicles
+## [x] Task 1: List All Vehicles
 
 **Endpoint:** `GET /vehicle/data/list`
 
@@ -98,7 +98,7 @@ routes.Add("vehicle", Layout.Create()
 
 ---
 
-## [ ] Task 2: Get Currently Controlled Vehicle
+## [x] Task 2: Get Currently Controlled Vehicle
 
 **Endpoint:** `GET /vehicle/data/current`
 
@@ -165,7 +165,7 @@ public record CurrentVehicleData(string Id, string Name, bool HasControl);
 
 ---
 
-## [ ] Task 3: Ignite Engine
+## [x] Task 3: Ignite Engine
 
 **Endpoint:** `POST /vehicle/actions/ignite`
 
@@ -239,7 +239,7 @@ routes.Add("vehicle", Layout.Create()
 
 ---
 
-## [ ] Task 4: Shutdown Engine
+## [x] Task 4: Shutdown Engine
 
 **Endpoint:** `POST /vehicle/actions/shutdown`
 
@@ -305,3 +305,28 @@ vehicle.SetEnum(VehicleEngine.MainShutdown);
 - An unknown `vehicleId` returns `404` with the ID echoed in the message.
 - `data.status` in the success response is exactly `"shutdown"`.
 - `data.vehicleId` in the success response matches the input `vehicleId`.
+
+---
+
+## [ ] Task 5: OpenAPI Spec Coverage
+
+**File:** `kroc-spec.yml` (project root)
+
+**Description:** Create and maintain an OpenAPI 3.x compliant specification covering every endpoint exposed by this feature module.
+
+**Endpoints to document:**
+
+| Method | Path                        | Summary                          |
+|--------|-----------------------------|----------------------------------|
+| GET    | `/vehicle/data/list`        | List all vehicles                |
+| GET    | `/vehicle/data/current`     | Get currently controlled vehicle |
+| POST   | `/vehicle/actions/ignite`   | Ignite vehicle engine            |
+| POST   | `/vehicle/actions/shutdown` | Shutdown vehicle engine          |
+
+**Acceptance criteria:**
+- `kroc-spec.yml` exists at the project root and is valid OpenAPI 3.x.
+- All four endpoints above have path entries with request/response schemas.
+- Success responses use the `{ status: "ok", data: ... }` envelope schema.
+- Error responses use the `{ status: "error", message: "..." }` envelope schema.
+- POST endpoints document the `{ vehicleId: string }` request body.
+- The spec is kept in sync with the implementation — updated in the same commit as any endpoint changes.
