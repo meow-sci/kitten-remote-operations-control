@@ -34,6 +34,22 @@ public sealed class VehicleDataModule : IEndpointModule
                     throw new ProviderException(ResponseStatus.InternalServerError,
                         "Unexpected error while listing vehicles.", ex);
                 }
+            }))
+            .Add("current", Inline.Create().Get(() =>
+            {
+                try
+                {
+                    Vehicle? current = Program.ControlledVehicle;
+                    if (current is null)
+                        return (object)new ApiResponse<CurrentVehicleData?>("ok", null);
+
+                    return (object)new ApiResponse<CurrentVehicleData?>("ok", new CurrentVehicleData(current.Id, current.Id, true));
+                }
+                catch (Exception ex)
+                {
+                    throw new ProviderException(ResponseStatus.InternalServerError,
+                        "Unexpected error retrieving current vehicle.", ex);
+                }
             }));
 
         routes.Add("vehicle", Layout.Create()
@@ -42,4 +58,5 @@ public sealed class VehicleDataModule : IEndpointModule
 }
 
 public record VehicleListItem(string Id, string Name, bool IsControlled);
+public record CurrentVehicleData(string Id, string Name, bool HasControl);
 public record ApiResponse<T>(string Status, T? Data);
