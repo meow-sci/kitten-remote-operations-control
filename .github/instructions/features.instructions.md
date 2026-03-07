@@ -44,7 +44,11 @@ var handler = Inline.Create()
     .Get(":id", (string id) => new { status = "ok", data = id });
 
 // POST — body type deserialized from JSON automatically
+// IMPORTANT: always call .Serializers(Serialization.Default()) on POST handlers.
+// GenHTTP's default registry includes FormFormat which calls System.Web.HttpUtility.ParseQueryString —
+// a method not available in the KSA game runtime. Serialization.Default() restricts to JSON + XML only.
 var handler = Inline.Create()
+    .Serializers(Serialization.Default())
     .Post((VehicleRequest body) => new { status = "ok", data = (object?)null });
 
 // Register under a path
@@ -89,6 +93,7 @@ public record VehicleRequest(string VehicleId);
 
 // in Register:
 var handler = Inline.Create()
+    .Serializers(Serialization.Default())
     .Post((VehicleRequest body) =>
     {
         var vehicle = Universe.CurrentSystem?.Vehicles.GetList()
@@ -152,6 +157,7 @@ catch (Exception ex)
 
 ```csharp
 using GenHTTP.Api.Protocol;
+using GenHTTP.Modules.Conversion;
 using GenHTTP.Modules.Functional;
 using GenHTTP.Modules.Layouting;
 using GenHTTP.Modules.Layouting.Provider;
@@ -176,6 +182,7 @@ public sealed class ExampleModule : IEndpointModule
 
         // POST /example/ignite — ignite engine on a named vehicle
         var ignite = Inline.Create()
+            .Serializers(Serialization.Default())
             .Post((VehicleRequest body) =>
             {
                 try
@@ -219,6 +226,7 @@ Every endpoint a feature exposes **must** be reflected in `kroc-spec.yml` at the
 - [ ] All responses use `{ status, data }` or `{ status, message }` envelope
 - [ ] `Universe.CurrentSystem` null-checked before use
 - [ ] Game calls wrapped in try/catch
+- [ ] POST handlers call `.Serializers(Serialization.Default())` (prevents `FormFormat` / `System.Web` crash)
 - [ ] Module registered in `Mod.cs`
 - [ ] Endpoint(s) documented in `kroc-spec.yml`
 - [ ] Feature endpoint(s) added to `FEATURES.md`

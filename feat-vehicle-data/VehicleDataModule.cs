@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using GenHTTP.Api.Content;
 using GenHTTP.Api.Protocol;
+using GenHTTP.Modules.Conversion;
 using GenHTTP.Modules.Functional;
 using GenHTTP.Modules.Layouting;
 using GenHTTP.Modules.Layouting.Provider;
@@ -53,7 +54,7 @@ public sealed class VehicleDataModule : IEndpointModule
             }));
 
         var actionsLayout = Layout.Create()
-            .Add("ignite", Inline.Create().Post((VehicleActionRequest body) =>
+            .Add("ignite", Inline.Create().Serializers(Serialization.Default()).Post((VehicleActionRequest body) =>
             {
                 if (string.IsNullOrWhiteSpace(body.VehicleId))
                     throw new ProviderException(ResponseStatus.BadRequest, "Missing or invalid vehicleId.");
@@ -80,7 +81,7 @@ public sealed class VehicleDataModule : IEndpointModule
                         "Unexpected error igniting engine.", ex);
                 }
             }))
-            .Add("shutdown", Inline.Create().Post((VehicleActionRequest body) =>
+            .Add("shutdown", Inline.Create().Serializers(Serialization.Default()).Post((VehicleActionRequest body) =>
             {
                 if (string.IsNullOrWhiteSpace(body.VehicleId))
                     throw new ProviderException(ResponseStatus.BadRequest, "Missing or invalid vehicleId.");

@@ -40,6 +40,8 @@ During startup, `KrocServer` calls `Register` on each module, passing the root `
 
 ## GenHTTP Functional Framework
 
+We MUST use GenHTTP because the KSA game does not link in the asp.net core web sdk framework.  Since dotnet 10 you CANNOT simply include the web sdk as library assembly dependencies, which means we can never reference any asp.net core sdk code ever.
+
 Routes are defined with the `Inline.Create()` builder from `GenHTTP.Modules.Functional`:
 
 ```csharp
