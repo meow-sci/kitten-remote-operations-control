@@ -203,6 +203,14 @@ public sealed class ExampleModule : IEndpointModule
 public record VehicleRequest(string VehicleId);
 ```
 
+## OpenAPI Spec
+
+Every endpoint a feature exposes **must** be reflected in `kroc-spec.yml` at the project root (OpenAPI 3.x).
+
+- Add a path entry for each new route.
+- Use `$ref` to shared response schemas where possible.
+- Keep the spec in sync: update it in the same commit as the feature code.
+
 ## Checklist
 
 - [ ] `.csproj` references `../server/server.csproj`
@@ -211,3 +219,4 @@ public record VehicleRequest(string VehicleId);
 - [ ] `Universe.CurrentSystem` null-checked before use
 - [ ] Game calls wrapped in try/catch
 - [ ] Module registered in `Mod.cs`
+- [ ] Endpoint(s) documented in `kroc-spec.yml`

@@ -15,6 +15,16 @@ This is **KROC** (Kitten Remote Operations Control), a mod for the game **Kitten
 - `core/` — shared utilities referenced by features.
 - `feat-*/` — individual feature projects. Each is a `.csproj` that references `server.csproj` and is referenced by `mod.csproj`.
 
+## OpenAPI Specification
+
+A file `kroc-spec.yml` lives at the **project root** and is the single source of truth for the HTTP API surface. It is an **OpenAPI 3.x** compliant spec.
+
+- Every endpoint exposed by every feature module **must** be documented in `kroc-spec.yml`.
+- When adding or changing an endpoint, update `kroc-spec.yml` in the same commit.
+- The spec uses JSON response schemas matching the standard envelope:
+  - Success: `{ status: "ok", data: <payload> }`
+  - Error: `{ status: "error", message: "<description>" }`
+
 ## How Features Work
 
 Every feature implements `IEndpointModule` from `server/IEndpointModule.cs`:
