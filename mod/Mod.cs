@@ -7,6 +7,7 @@ using StarMap.API;
 using KSA;
 using KROC.Server;
 using KROC.FeatPing;
+using KROC.FeatVehicleData;
 
 namespace KROC;
 
@@ -34,6 +35,7 @@ public class Mod
       _server = new KrocServer(config, new List<IEndpointModule>
       {
         new PingModule(),
+        new VehicleDataModule()
       });
       _ = _server.StartAsync();
       _isInitialized = true;

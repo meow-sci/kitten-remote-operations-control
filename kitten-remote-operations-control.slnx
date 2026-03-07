@@ -10,5 +10,6 @@
   <Project Path="server/server.csproj" />
   <Project Path="mod/mod.csproj" />
   <Project Path="feat-ping/feat-ping.csproj" />
+  <Project Path="feat-vehicle-data/feat-vehicle-data.csproj" />
 
 </Solution>

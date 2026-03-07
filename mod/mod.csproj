@@ -16,6 +16,7 @@
     <ProjectReference Include="..\core\core.csproj" />
     <ProjectReference Include="..\server\server.csproj" />
     <ProjectReference Include="..\feat-ping\feat-ping.csproj" />
+    <ProjectReference Include="..\feat-vehicle-data\feat-vehicle-data.csproj" />
   </ItemGroup>
 
   <!-- Copies files for mod deployment -->
@@ -31,18 +32,16 @@
       Condition="Exists('$(TargetPath)')" />
     <Copy SourceFiles="$(TargetDir)KROC.Mod.pdb" DestinationFolder="$(DistDir)" />
 
-    <Copy SourceFiles="$(TargetDir)KROC.Core.dll" DestinationFolder="$(DistDir)" />
-    <Copy SourceFiles="$(TargetDir)KROC.Core.pdb" DestinationFolder="$(DistDir)" />
-    <Copy SourceFiles="$(TargetDir)KROC.Server.dll" DestinationFolder="$(DistDir)" />
-    <Copy SourceFiles="$(TargetDir)KROC.Server.pdb" DestinationFolder="$(DistDir)" />
-    <Copy SourceFiles="$(TargetDir)KROC.FeatPing.dll" DestinationFolder="$(DistDir)" />
-    <Copy SourceFiles="$(TargetDir)KROC.FeatPing.pdb" DestinationFolder="$(DistDir)" />
-
     <Copy SourceFiles="$(TargetDir)Tomlyn.dll" DestinationFolder="$(DistDir)" />
 
+    <!-- Dynamically discover KROC.*.dll and KROC.*.pdb files -->
     <ItemGroup>
+      <KrocAssemblies Include="$(TargetDir)KROC.*.dll;$(TargetDir)KROC.*.pdb" />
       <GenHttpAssemblies Include="$(TargetDir)GenHTTP.*.dll" />
     </ItemGroup>
+    <Copy SourceFiles="@(KrocAssemblies)"
+          DestinationFolder="$(DistDir)"
+          Condition="'@(KrocAssemblies)' != ''" />
     <Copy SourceFiles="@(GenHttpAssemblies)"
           DestinationFolder="$(DistDir)"
           Condition="'@(GenHttpAssemblies)' != ''" />

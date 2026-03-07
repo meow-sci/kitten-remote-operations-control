@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>KROC.FeatVehicleData</AssemblyName>
+    <RootNamespace>KROC.FeatVehicleData</RootNamespace>
+    <Description>VehicleData feature module for KROC</Description>
+    <PackageId>KROC.FeatVehicleData</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\server\server.csproj" />
+  </ItemGroup>
+
+
+</Project>
