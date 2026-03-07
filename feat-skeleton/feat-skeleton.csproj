@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>KROC.FeatSkeleton</AssemblyName>
+    <RootNamespace>KROC.FeatSkeleton</RootNamespace>
+    <Description>Skeleton feature module for KROC</Description>
+    <PackageId>KROC.FeatSkeleton</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\server\server.csproj" />
+  </ItemGroup>
+
+
+</Project>

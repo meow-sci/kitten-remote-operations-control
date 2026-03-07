@@ -39,10 +39,10 @@ public sealed class KrocServer
 
         var api = Layout.Create();
 
-        // /ping — proof-of-life
-        var ping = Inline.Create()
+        // /health — proof-of-life
+        var health = Inline.Create()
                          .Get(() => new { status = "ok" });
-        api.Add("ping", ping);
+        api.Add("health", health);
 
         // CORS — allow all origins
         api.Add(CorsPolicy.Permissive());

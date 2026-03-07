@@ -4,12 +4,12 @@ using GenHTTP.Modules.IO;
 using GenHTTP.Modules.Layouting.Provider;
 using KROC.Server;
 
-namespace KROC.FeatPing;
+namespace KROC.FeatSkeleton;
 
 /// <summary>
-/// Ping feature module — registers a GET /pong endpoint that returns "pong" as text/plain.
+/// Skeleton feature module
 /// </summary>
-public sealed class PingModule : IEndpointModule
+public sealed class SkeletonModule : IEndpointModule
 {
   public void Register(LayoutBuilder routes)
   {
