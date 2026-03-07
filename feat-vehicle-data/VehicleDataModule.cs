@@ -52,11 +52,45 @@ public sealed class VehicleDataModule : IEndpointModule
                 }
             }));
 
+        var actionsLayout = Layout.Create()
+            .Add("ignite", Inline.Create().Post((VehicleActionRequest body) =>
+            {
+                if (string.IsNullOrWhiteSpace(body.VehicleId))
+                    throw new ProviderException(ResponseStatus.BadRequest, "Missing or invalid vehicleId.");
+
+                try
+                {
+                    var vehicles = Universe.CurrentSystem?.Vehicles.GetList() ?? Enumerable.Empty<Vehicle>();
+                    var vehicle  = vehicles.FirstOrDefault(v => v.Id == body.VehicleId);
+
+                    if (vehicle is null)
+                        throw new ProviderException(ResponseStatus.NotFound, $"Vehicle not found: {body.VehicleId}.");
+
+                    vehicle.SetEnum(VehicleEngine.MainIgnite);
+
+                    return (object)new ApiResponse<VehicleActionResult>("ok", new VehicleActionResult(body.VehicleId, "ignited"));
+                }
+                catch (ProviderException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    throw new ProviderException(ResponseStatus.InternalServerError,
+                        "Unexpected error igniting engine.", ex);
+                }
+            }));
+
         routes.Add("vehicle", Layout.Create()
             .Add("data", dataLayout));
+
+        routes.Add("vehicle", Layout.Create()
+            .Add("actions", actionsLayout));
     }
 }
 
 public record VehicleListItem(string Id, string Name, bool IsControlled);
 public record CurrentVehicleData(string Id, string Name, bool HasControl);
 public record ApiResponse<T>(string Status, T? Data);
+public record VehicleActionRequest(string VehicleId);
+public record VehicleActionResult(string VehicleId, string Status);
