@@ -1,0 +1,240 @@
+openapi: 3.1.0
+info:
+  title: KROC — Kitten Remote Operations Control
+  description: HTTP API for reading vehicle telemetry and sending commands to Kitten Space Agency.
+  version: 0.1.0
+
+servers:
+  - url: http://localhost:8080
+    description: Local KSA mod server
+
+paths:
+  /vehicle/data/list:
+    get:
+      summary: List all vehicles
+      description: Returns a JSON array of all vehicles present in the current game system.
+      operationId: listVehicles
+      responses:
+        '200':
+          description: Successfully retrieved vehicle list (empty array is valid).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleListResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /vehicle/data/current:
+    get:
+      summary: Get currently controlled vehicle
+      description: Returns the vehicle the player currently controls, or null if no vehicle is controlled.
+      operationId: getCurrentVehicle
+      responses:
+        '200':
+          description: Successfully retrieved current vehicle (data may be null).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CurrentVehicleResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /vehicle/actions/ignite:
+    post:
+      summary: Ignite vehicle engine
+      description: Sends a main-engine ignite command to the specified vehicle.
+      operationId: igniteEngine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VehicleActionRequest'
+      responses:
+        '200':
+          description: Engine ignition command sent successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleActionIgniteResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /vehicle/actions/shutdown:
+    post:
+      summary: Shutdown vehicle engine
+      description: Sends a main-engine shutdown command to the specified vehicle.
+      operationId: shutdownEngine
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VehicleActionRequest'
+      responses:
+        '200':
+          description: Engine shutdown command sent successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleActionShutdownResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+components:
+  schemas:
+    VehicleListItem:
+      type: object
+      required: [id, name, isControlled]
+      properties:
+        id:
+          type: string
+          description: Unique vehicle identifier.
+          example: vehicle-123
+        name:
+          type: string
+          description: Display name of the vehicle (currently same as id).
+          example: vehicle-123
+        isControlled:
+          type: boolean
+          description: True if this vehicle is currently being controlled by the player.
+          example: true
+
+    CurrentVehicleData:
+      type: object
+      required: [id, name, hasControl]
+      properties:
+        id:
+          type: string
+          example: vehicle-123
+        name:
+          type: string
+          example: vehicle-123
+        hasControl:
+          type: boolean
+          example: true
+
+    VehicleActionRequest:
+      type: object
+      required: [vehicleId]
+      properties:
+        vehicleId:
+          type: string
+          description: The ID of the vehicle to send the command to.
+          example: vehicle-123
+
+    VehicleActionResult:
+      type: object
+      required: [vehicleId, status]
+      properties:
+        vehicleId:
+          type: string
+          example: vehicle-123
+        status:
+          type: string
+          description: The action that was performed.
+          example: ignited
+
+    VehicleListResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/VehicleListItem'
+
+    CurrentVehicleResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          oneOf:
+            - $ref: '#/components/schemas/CurrentVehicleData'
+            - type: 'null'
+
+    VehicleActionIgniteResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          allOf:
+            - $ref: '#/components/schemas/VehicleActionResult'
+            - properties:
+                status:
+                  type: string
+                  enum: [ignited]
+
+    VehicleActionShutdownResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          allOf:
+            - $ref: '#/components/schemas/VehicleActionResult'
+            - properties:
+                status:
+                  type: string
+                  enum: [shutdown]
+
+    ErrorResponse:
+      type: object
+      required: [status, message]
+      properties:
+        status:
+          type: string
+          enum: [error]
+        message:
+          type: string
+          example: An error occurred.
+
+  responses:
+    BadRequest:
+      description: Missing or invalid request parameter.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            message: Missing or invalid vehicleId.
+
+    NotFound:
+      description: The specified vehicle was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            message: Vehicle not found.
+
+    InternalServerError:
+      description: An unexpected server-side error occurred.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+          example:
+            status: error
+            message: Unexpected error.
