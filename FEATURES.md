@@ -1,3 +1,7 @@
+# KROC
+
+The game will run a HTTP server at http://127.0.0.1:7887
+
 # KROC Feature Index
 
 High-level overview of every HTTP endpoint exposed by the mod. For full request/response schemas see `kroc-spec.yml`.

@@ -13,3 +13,4 @@ These are simple hacky scripts that interact with the game via the KROC game mod
 
 The [kroc-spec.yml](../../kroc-spec.yml) file at the project root defines the OpenAPI spec API endpoints exposed by the mod. Use these to read game state and send commands.
 
+The [FEATURES.md](../../FEATURES.md) file provides a high-level overview of the features and endpoints implemented by the mod, and can be a helpful starting point for understanding what endpoints are available.

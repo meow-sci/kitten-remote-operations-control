@@ -30,6 +30,7 @@ public class Mod
   {
     try
     {
+      Console.WriteLine("KROC: initializing mod...");
       Patcher.Patch();
       var config = KrocServerConfig.LoadFromToml(GetConfigPath());
       _server = new KrocServer(config, new List<IEndpointModule>
@@ -37,7 +38,11 @@ public class Mod
         new PingModule(),
         new VehicleDataModule()
       });
-      _ = _server.StartAsync();
+      _ = _server.StartAsync().ContinueWith(t =>
+      {
+        if (t.IsFaulted)
+          Console.WriteLine($"KROC: server startup failed: {t.Exception?.GetBaseException().Message}");
+      });
       _isInitialized = true;
     }
     catch (Exception ex)

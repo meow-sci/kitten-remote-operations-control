@@ -37,6 +37,9 @@ public sealed class KrocServer
             return;
         }
 
+        Console.WriteLine("KROC: server is starting...");
+
+
         var api = Layout.Create();
 
         // /health — proof-of-life

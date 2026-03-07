@@ -109,9 +109,7 @@ public sealed class VehicleDataModule : IEndpointModule
             }));
 
         routes.Add("vehicle", Layout.Create()
-            .Add("data", dataLayout));
-
-        routes.Add("vehicle", Layout.Create()
+            .Add("data", dataLayout)
             .Add("actions", actionsLayout));
     }
 }
