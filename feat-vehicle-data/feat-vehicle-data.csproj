@@ -12,5 +12,11 @@
     <ProjectReference Include="..\server\server.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Reference Include="KSA">
+      <HintPath>$(KSAFolder)\KSA.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
 
 </Project>
