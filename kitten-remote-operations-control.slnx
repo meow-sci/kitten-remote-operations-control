@@ -7,6 +7,7 @@
   </Configurations>
 
   <Project Path="core/core.csproj" />
+  <Project Path="game-state-updater/game-state-updater.csproj" />
   <Project Path="server/server.csproj" />
   <Project Path="mod/mod.csproj" />
   <Project Path="feat-ping/feat-ping.csproj" />

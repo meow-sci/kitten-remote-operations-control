@@ -10,6 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\game-state-updater\game-state-updater.csproj" />
     <ProjectReference Include="..\core\core.csproj" />
   </ItemGroup>
 

@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>KROC.GameStateUpdater</AssemblyName>
+    <RootNamespace>KROC.GameStateUpdater</RootNamespace>
+    <Description>Thread-safe game state update scheduler for KROC</Description>
+    <PackageId>KROC.GameStateUpdater</PackageId>
+  </PropertyGroup>
+
+</Project>
