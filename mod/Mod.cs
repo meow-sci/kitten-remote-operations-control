@@ -10,6 +10,7 @@ using KROC.FeatPing;
 using KROC.FeatVehicleData;
 using KROC.FeatBodies;
 using KROC.FeatFlightComputer;
+using KROC.GameStateUpdater;
 
 namespace KROC;
 
@@ -56,7 +57,17 @@ public class Mod
   }
 
   [StarMapBeforeGui]
-  public void OnBeforeUi(double dt) { }
+  public void OnBeforeUi(double dt)
+  {
+      try
+      {
+          GameThread.DrainOnGameThread();
+      }
+      catch (Exception ex)
+      {
+          Console.WriteLine($"KROC: error draining game state queue: {ex.Message}");
+      }
+  }
 
   [StarMapAfterGui]
   public void OnAfterUi(double dt)

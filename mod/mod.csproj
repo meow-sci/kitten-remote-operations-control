@@ -19,6 +19,7 @@
     <ProjectReference Include="..\feat-vehicle-data\feat-vehicle-data.csproj" />
     <ProjectReference Include="..\feat-bodies\feat-bodies.csproj" />
     <ProjectReference Include="..\feat-flight-computer\feat-flight-computer.csproj" />
+    <ProjectReference Include="..\game-state-updater\game-state-updater.csproj" />
   </ItemGroup>
 
   <!-- Copies files for mod deployment -->
