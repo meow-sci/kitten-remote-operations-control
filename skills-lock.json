@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "opentui": {
+      "source": "msmps/opentui-skill",
+      "sourceType": "github",
+      "computedHash": "4039edfa360a518669b40b319a8e5ae19531b10e690f6d6713480259eca97e17"
+    }
+  }
+}

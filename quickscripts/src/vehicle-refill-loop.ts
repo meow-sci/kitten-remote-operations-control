@@ -8,15 +8,15 @@ if (!vehicleId || isNaN(intervalMs)) {
 
 while (true) {
   // Shutdown
-  await fetch('http://localhost:7887/vehicle/actions/shutdown', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ vehicleId }),
-  });
+  // await fetch('http://localhost:7887/vehicle/actions/shutdown', {
+  //   method: 'POST',
+  //   headers: {
+  //     'Content-Type': 'application/json',
+  //   },
+  //   body: JSON.stringify({ vehicleId }),
+  // });
 
-  await Bun.sleep(50);
+  // await Bun.sleep(50);
 
   // Refill
   const refillResponse = await fetch('http://localhost:7887/vehicle/actions/refill', {
@@ -31,17 +31,18 @@ while (true) {
   await Bun.sleep(50);
 
   // Ignite
-  const igniteResponse = await fetch('http://localhost:7887/vehicle/actions/ignite', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({ vehicleId }),
-  });
-  const igniteData = await igniteResponse.json();
+  // const igniteResponse = await fetch('http://localhost:7887/vehicle/actions/ignite', {
+  //   method: 'POST',
+  //   headers: {
+  //     'Content-Type': 'application/json',
+  //   },
+  //   body: JSON.stringify({ vehicleId }),
+  // });
+  // const igniteData = await igniteResponse.json();
 
   console.clear();
-  console.log(`[${new Date().toISOString()}]`, JSON.stringify({ refill: refillData, ignite: igniteData }, null, 2));
+  // console.log(`[${new Date().toISOString()}]`, JSON.stringify({ refill: refillData, ignite: igniteData }, null, 2));
+  console.log(`[${new Date().toISOString()}]`, JSON.stringify({ refill: refillData }, null, 2));
 
   await Bun.sleep(intervalMs);
 }
