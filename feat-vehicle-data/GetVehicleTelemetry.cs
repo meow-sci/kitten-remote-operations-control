@@ -19,10 +19,14 @@ namespace KROC.FeatVehicleData;
 ///   totalMassKg         — total wet mass (kg)
 ///   inertMassKg         — dry/structural mass (kg)
 ///   propellantMassKg    — current propellant mass (kg)
+///   twrCurrent          — current thrust-to-weight ratio (throttle-scaled, 0 when engines off)
+///   twrMax              — max TWR at current mass and full throttle
+///   maxAccelMps2        — max acceleration in m/s² = twrMax × parent-body surface g
+///                         Use maxAccelMps2 as the planning acceleration for brachistochrone
+///                         calculations — it remains valid even when engines are cut.
 ///
-/// accelerationMps2 is the effective a = F/m while engines are burning.
-/// When engines are cut for a refill it will read near-zero; supply a fixed
-/// planning value as a script argument instead of relying on this field.
+/// accelerationMps2 is the measured body-frame acceleration magnitude. It drops
+/// to ~0 during refill pauses. Use maxAccelMps2 for planning instead.
 /// </summary>
 public static class GetVehicleTelemetry
 {
@@ -42,6 +46,14 @@ public static class GetVehicleTelemetry
                     var acc = v.AccelerationBody;
                     var simTimeSec = Universe.GetElapsedSimTime().Seconds();
 
+                    // TWR and max acceleration
+                    var fc = v.FlightComputer;
+                    double gSurface = 6.6743e-11 * v.Parent.Mass / (v.Parent.MeanRadius * v.Parent.MeanRadius);
+                    double maxThrustN = (double)fc.VehicleConfig.TotalEngineVacuumThrust;
+                    double weightN    = (double)v.TotalMass * gSurface;
+                    double twrMax     = weightN > 0.0 ? maxThrustN / weightN : 0.0;
+                    double maxAccelMps2 = twrMax * gSurface;
+
                     return (object)new
                     {
                         status = "ok",
@@ -55,6 +67,9 @@ public static class GetVehicleTelemetry
                             totalMassKg      = (double)v.TotalMass,
                             inertMassKg      = (double)v.InertMass,
                             propellantMassKg = (double)v.PropellantMass,
+                            twrCurrent       = v.NavBallData.ThrustWeightRatio,
+                            twrMax,
+                            maxAccelMps2,
                         }
                     };
                 }

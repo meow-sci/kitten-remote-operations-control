@@ -9,6 +9,7 @@ using KROC.Server;
 using KROC.FeatPing;
 using KROC.FeatVehicleData;
 using KROC.FeatBodies;
+using KROC.FeatFlightComputer;
 
 namespace KROC;
 
@@ -38,7 +39,8 @@ public class Mod
       {
         new PingModule(),
         new VehicleDataModule(),
-        new BodiesModule()
+        new BodiesModule(),
+        new FlightComputerModule()
       });
       _ = _server.StartAsync().ContinueWith(t =>
       {

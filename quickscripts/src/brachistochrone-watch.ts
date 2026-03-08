@@ -20,21 +20,27 @@
  * switches automatically to BURN phase.
  *
  * Usage:
- *   bun src/brachistochrone-watch.ts [targetBodyId] [planningAccelMps2]
+ *   bun src/brachistochrone-watch.ts [targetBodyId] [--hold]
  *
  * Examples:
- *   bun src/brachistochrone-watch.ts mars 5.5
- *   bun src/brachistochrone-watch.ts mars          # uses live accel from telemetry
+ *   bun src/brachistochrone-watch.ts mars
+ *   bun src/brachistochrone-watch.ts mars --hold  # auto-hold heading via FC
  *
  * How to use the output:
  *   ACCELERATING (pre-flip) → point ship at BURN HEADING, fire engines
  *   DECELERATING (post-flip) → point ship at RETRO HEADING (opposite), fire engines
  *   Flip when the countdown reaches zero.
+ *
+ * Flight computer integration:
+ *   When --hold flag is passed (or HOLD_HEADING env var is set), the script
+ *   pushes the computed heading to the KSA flight computer every poll cycle
+ *   so the ship automatically holds the correct attitude. The FC is set to
+ *   Custom mode in the EclBody (ecliptic-inertial) frame.
  */
 
 const BASE_URL = process.env.KROC_URL ?? "http://localhost:7887";
 const TARGET_ID = Bun.argv[2] ?? "mars";
-const CLI_ACCEL = Bun.argv[3] ? parseFloat(Bun.argv[3]) : undefined;
+const HOLD_HEADING = Bun.argv.includes("--hold") || process.env.HOLD_HEADING === "1";
 // const POLL_MS = 3000;
 const POLL_MS = 250;
 const MAX_ITERS = 12;
@@ -63,6 +69,9 @@ interface TelemetryData {
   totalMassKg: number;
   inertMassKg: number;
   propellantMassKg: number;
+  twrCurrent: number;
+  twrMax: number;
+  maxAccelMps2: number;
 }
 
 interface BodyStateData {
@@ -89,6 +98,15 @@ interface AlignmentWindow {
   depSimTimeSec: number;   // optimal departure sim time
   tripTimeSec: number;     // trip time at that window
   scannedAt: number;       // wall-clock ms when this was computed
+}
+
+interface FlightComputerState {
+  attitudeMode: string;
+  trackTarget: string;
+  frame: string;
+  errorRollDeg: number;
+  errorYawDeg: number;
+  errorPitchDeg: number;
 }
 
 // ── Vector math ──────────────────────────────────────────────────────────────
@@ -143,6 +161,31 @@ async function predictBody(id: string, simTimeSec: number): Promise<BodyPredictD
   if (json.status !== "ok" || !json.data)
     throw new Error(`Predict error for '${id}' at t=${simTimeSec}: ${json.message ?? "no data"}`);
   return json.data;
+}
+
+/**
+ * Push a heading to the flight computer (Custom mode, EclBody frame).
+ * Converts an ecliptic direction vector → euler angles (roll=0, yaw=lon, pitch=lat).
+ */
+async function setFcHeading(heading: Vec3): Promise<void> {
+  const u = norm(heading);
+  const yaw = Math.atan2(u.y, u.x);                    // ecliptic longitude (rad)
+  const pitch = Math.asin(Math.max(-1, Math.min(1, u.z))); // ecliptic latitude (rad)
+  await fetch(`${BASE_URL}/flight-computer/attitude`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roll: 0, yaw, pitch, frame: "EclBody" }),
+  });
+}
+
+/** Read FC state for display. */
+async function getFcState(): Promise<FlightComputerState | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/flight-computer/state`);
+    const json: KrocResponse<FlightComputerState> = await res.json() as KrocResponse<FlightComputerState>;
+    if (json.status === "ok" && json.data) return json.data;
+  } catch { /* non-fatal */ }
+  return null;
 }
 
 // ── Core algorithm ────────────────────────────────────────────────────────────
@@ -401,7 +444,7 @@ function buildScanLine(s: ScanState): string {
 
 let flipTimeSec: number | null = null; // persists across polls
 
-function printPlan(ship: TelemetryData, plan: BrachistochronePlan, accel: number, accelIsLive: boolean): void {
+function printPlan(ship: TelemetryData, plan: BrachistochronePlan, accel: number, accelIsLive: boolean, fcState: FlightComputerState | null): void {
   // Update flip time if it's still in the future (don't reset a past flip)
   if (flipTimeSec === null || plan.flipTimeSec > ship.simTimeSec) {
     flipTimeSec = plan.flipTimeSec;
@@ -448,8 +491,21 @@ function printPlan(ship: TelemetryData, plan: BrachistochronePlan, accel: number
   console.log("║  SHIP STATE                                              ║");
   console.log(`║  Total mass:    ${fmtMass(ship.totalMassKg).padEnd(41)} ║`);
   console.log(`║  Propellant:    ${fmtMass(ship.propellantMassKg).padEnd(41)} ║`);
-  console.log(`║  Accel (plan):  ${(accel.toFixed(3) + " m/s²" + (accelIsLive ? " (live)" : " (arg)")).padEnd(41)} ║`);
+  console.log(`║  Accel (plan):  ${(accel.toFixed(3) + " m/s²" + (accelIsLive ? "" : " (fallback)")).padEnd(41)} ║`);
+  console.log(`║  TWR (current): ${ship.twrCurrent.toFixed(3).padEnd(41)} ║`);
+  console.log(`║  TWR (max):     ${ship.twrMax.toFixed(3).padEnd(41)} ║`);
   console.log(`║  Converg iters: ${String(plan.iterations).padEnd(41)} ║`);
+  if (HOLD_HEADING && fcState) {
+    const errTotal = Math.sqrt(fcState.errorRollDeg ** 2 + fcState.errorYawDeg ** 2 + fcState.errorPitchDeg ** 2);
+    console.log("╠══════════════════════════════════════════════════════════╣");
+    console.log("║  FLIGHT COMPUTER (auto-hold)                             ║");
+    console.log(`║  Mode: ${(fcState.attitudeMode + " / " + fcState.trackTarget).padEnd(50)} ║`);
+    console.log(`║  Frame: ${fcState.frame.padEnd(49)} ║`);
+    console.log(`║  Att error: ${(errTotal.toFixed(2) + "°").padEnd(45)} ║`);
+  } else if (HOLD_HEADING) {
+    console.log("╠══════════════════════════════════════════════════════════╣");
+    console.log("║  FLIGHT COMPUTER (auto-hold)  — reading state...         ║");
+  }
   console.log("╠══════════════════════════════════════════════════════════╣");
   console.log(`║  Sim time: ${now.toFixed(0).padEnd(46)} ║`);
   console.log(`║  Polling every ${POLL_MS / 1000}s   [Ctrl-C to stop]${" ".repeat(21)} ║`);
@@ -529,7 +585,7 @@ function printScanProgress(frac: number): void {
 // ── Main loop ─────────────────────────────────────────────────────────────────
 
 async function poll(): Promise<void> {
-  let lastAccel      = CLI_ACCEL ?? 5.0;
+  let lastAccel      = 5.0;
   let phase: Phase   = "pre";
   let accelHighCount = 0;
 
@@ -543,7 +599,7 @@ async function poll(): Promise<void> {
   try {
     const seedShip = await getTelemetry();
     const t0       = seedShip.simTimeSec;
-    const accel0   = CLI_ACCEL ?? (seedShip.accelerationMps2 > 0.01 ? seedShip.accelerationMps2 : 5.0);
+    const accel0   = seedShip.maxAccelMps2 > 0.001 ? seedShip.maxAccelMps2 : 5.0;
 
     alignWindow = await scanAlignmentWindows(t0, accel0, /* coarse */ true, (frac) => {
       scanState.progress = frac;
@@ -568,7 +624,7 @@ async function poll(): Promise<void> {
       try {
         const refShip = await getTelemetry();
         const t0r     = refShip.simTimeSec;
-        const accelR  = CLI_ACCEL ?? (refShip.accelerationMps2 > 0.01 ? refShip.accelerationMps2 : lastAccel);
+        const accelR  = refShip.maxAccelMps2 > 0.001 ? refShip.maxAccelMps2 : lastAccel;
 
         scanState = { running: true, progress: 0, nextRefreshMs: 0 };
 
@@ -589,17 +645,14 @@ async function poll(): Promise<void> {
     try {
       const ship = await getTelemetry();
 
-      // Determine planning accel: CLI arg > live nonzero reading > last known
+      // Determine planning accel: maxAccelMps2 from telemetry > last known
       let accel: number;
-      let accelIsLive = false;
-      if (CLI_ACCEL !== undefined) {
-        accel = CLI_ACCEL;
-      } else if (ship.accelerationMps2 > 0.01) {
-        accel = ship.accelerationMps2;
+      const accelIsLive = ship.maxAccelMps2 > 0.001;
+      if (accelIsLive) {
+        accel = ship.maxAccelMps2;
         lastAccel = accel;
-        accelIsLive = true;
       } else {
-        accel = lastAccel; // engines cut for refill — hold last known
+        accel = lastAccel; // no engines configured — hold last known
       }
 
       // Phase transition: switch to burn after 2 consecutive high-accel polls
@@ -617,7 +670,18 @@ async function poll(): Promise<void> {
       if (phase === "burn") {
         // ── BURN phase ─────────────────────────────────────────────────────
         const plan = await computePlan(ship, accel);
-        printPlan(ship, plan, accel, accelIsLive);
+
+        // Push heading to flight computer if --hold is active
+        let fcState: FlightComputerState | null = null;
+        if (HOLD_HEADING) {
+          const timeToFlipLocal = (flipTimeSec ?? plan.flipTimeSec) - ship.simTimeSec;
+          const postFlipLocal = timeToFlipLocal < 0;
+          const activeHeading = postFlipLocal ? plan.retroHeading : plan.burnHeading;
+          await setFcHeading(activeHeading);
+          fcState = await getFcState();
+        }
+
+        printPlan(ship, plan, accel, accelIsLive, fcState);
       } else {
         // ── PRE-LAUNCH phase ───────────────────────────────────────────────
         const [earth, marsState] = await Promise.all([

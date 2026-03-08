@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <AssemblyName>KROC.FeatFlightComputer</AssemblyName>
+    <RootNamespace>KROC.FeatFlightComputer</RootNamespace>
+    <Description>Flight computer feature module for KROC — attitude hold and flight computer state</Description>
+    <PackageId>KROC.FeatFlightComputer</PackageId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\server\server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="KSA">
+      <HintPath>$(KSAFolder)\KSA.dll</HintPath>
+    </Reference>
+    <Reference Include="Brutal.Core.Numerics">
+      <HintPath>$(KSAFolder)\Brutal.Core.Numerics.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+</Project>

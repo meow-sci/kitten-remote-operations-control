@@ -143,6 +143,89 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /flight-computer/state:
+    get:
+      summary: Get flight computer state
+      description: |
+        Returns the current flight computer state for the controlled vehicle:
+        attitude mode, tracking target, reference frame, custom euler angles,
+        attitude error angles, deadband, and rate limit.
+      operationId: getFlightComputerState
+      responses:
+        '200':
+          description: Flight computer state retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlightComputerStateResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /flight-computer/attitude:
+    post:
+      summary: Set custom attitude hold
+      description: |
+        Sets the flight computer to hold a custom attitude specified as euler
+        angles (roll, yaw, pitch) in a chosen reference frame. Automatically
+        switches to Auto mode with Custom tracking target.
+
+        For the EclBody (ecliptic-inertial) frame, yaw = ecliptic longitude
+        and pitch = ecliptic latitude. Euler order is Roll-Yaw-Pitch for all
+        frames except EnuBody which uses Roll-Pitch-Yaw.
+
+        This is the primary endpoint for external guidance — push a computed
+        heading each cycle and the flight computer will hold it.
+      operationId: setAttitude
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetAttitudeRequest'
+      responses:
+        '200':
+          description: Attitude set successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetAttitudeResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /flight-computer/track:
+    post:
+      summary: Set named tracking target
+      description: |
+        Sets the flight computer to track a named direction (e.g. Prograde,
+        Retrograde, Normal). Switches to Auto mode and updates the navball
+        to the appropriate reference frame.
+      operationId: setTrackTarget
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SetTrackTargetRequest'
+      responses:
+        '200':
+          description: Tracking target set successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SetTrackTargetResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
   /bodies/list:
     get:
       summary: List all celestial bodies
@@ -386,6 +469,21 @@ components:
           type: number
           format: double
           description: Current propellant mass in kg.
+        twrCurrent:
+          type: number
+          format: double
+          description: Current thrust-to-weight ratio (throttle-scaled; 0 when engines are off).
+        twrMax:
+          type: number
+          format: double
+          description: Maximum TWR at current mass and full throttle (vacuum, standard surface gravity).
+        maxAccelMps2:
+          type: number
+          format: double
+          description: |
+            Maximum acceleration in m/s² = twrMax × parent-body surface g.
+            Use this as the planning acceleration for brachistochrone calculations.
+            Valid even when engines are cut (it reflects ship capability, not current thrust).
 
     VehicleTelemetryResponse:
       type: object
@@ -467,6 +565,132 @@ components:
         message:
           type: string
           example: An error occurred.
+
+    FlightComputerStateData:
+      type: object
+      required: [attitudeMode, trackTarget, frame, rollMode, burnMode, profile,
+                 customRollRad, customYawRad, customPitchRad,
+                 errorRollDeg, errorYawDeg, errorPitchDeg,
+                 angleDeadbandDeg, rateLimitDegPerSec]
+      properties:
+        attitudeMode:
+          type: string
+          enum: [Manual, Auto]
+          description: Current attitude control mode.
+        trackTarget:
+          type: string
+          description: Current tracking target (None, Custom, Prograde, etc.).
+        frame:
+          type: string
+          description: Current reference frame (EclBody, EnuBody, Lvlh, VlfBody, BurnBody, Dock).
+        rollMode:
+          type: string
+          enum: [Decoupled, Up, Down]
+        burnMode:
+          type: string
+          enum: [Manual, Auto]
+        profile:
+          type: string
+          description: Matched attitude profile (Strict, Balanced, Relaxed, or Custom).
+        customRollRad:
+          type: number
+          format: double
+          description: Custom euler roll angle in radians.
+        customYawRad:
+          type: number
+          format: double
+          description: Custom euler yaw angle in radians.
+        customPitchRad:
+          type: number
+          format: double
+          description: Custom euler pitch angle in radians.
+        errorRollDeg:
+          type: number
+          format: double
+          description: Current attitude error on roll axis in degrees.
+        errorYawDeg:
+          type: number
+          format: double
+          description: Current attitude error on yaw axis in degrees.
+        errorPitchDeg:
+          type: number
+          format: double
+          description: Current attitude error on pitch axis in degrees.
+        angleDeadbandDeg:
+          type: number
+          format: double
+          description: Attitude deadband in degrees.
+        rateLimitDegPerSec:
+          type: number
+          format: double
+          description: Rate limit in degrees per second.
+
+    FlightComputerStateResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status: { type: string, enum: [ok] }
+        data:
+          $ref: '#/components/schemas/FlightComputerStateData'
+
+    SetAttitudeRequest:
+      type: object
+      required: [roll, yaw, pitch]
+      properties:
+        roll:
+          type: number
+          format: double
+          description: Euler roll in radians.
+          example: 0
+        yaw:
+          type: number
+          format: double
+          description: Euler yaw in radians (ecliptic longitude for EclBody frame).
+          example: 1.234
+        pitch:
+          type: number
+          format: double
+          description: Euler pitch in radians (ecliptic latitude for EclBody frame).
+          example: 0.05
+        frame:
+          type: string
+          description: "Reference frame. Default: EclBody. Valid: EclBody, EnuBody, Lvlh, VlfBody, BurnBody, Dock."
+          example: EclBody
+
+    SetAttitudeResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status: { type: string, enum: [ok] }
+        data:
+          type: object
+          required: [mode, frame, rollRad, yawRad, pitchRad]
+          properties:
+            mode: { type: string, example: Custom }
+            frame: { type: string, example: EclBody }
+            rollRad: { type: number, format: double }
+            yawRad: { type: number, format: double }
+            pitchRad: { type: number, format: double }
+
+    SetTrackTargetRequest:
+      type: object
+      required: [target]
+      properties:
+        target:
+          type: string
+          description: "Named tracking target. Valid: None, Custom, Forward, Backward, Up, Down, Ahead, Behind, RadialOut, RadialIn, Prograde, Retrograde, Normal, AntiNormal, Outward, Inward, PositiveDv, NegativeDv, Toward, Away, Antivel, Align."
+          example: Prograde
+
+    SetTrackTargetResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status: { type: string, enum: [ok] }
+        data:
+          type: object
+          required: [target]
+          properties:
+            target: { type: string, example: Prograde }
 
   responses:
     BadRequest:

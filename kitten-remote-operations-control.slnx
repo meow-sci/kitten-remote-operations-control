@@ -11,5 +11,7 @@
   <Project Path="mod/mod.csproj" />
   <Project Path="feat-ping/feat-ping.csproj" />
   <Project Path="feat-vehicle-data/feat-vehicle-data.csproj" />
+  <Project Path="feat-bodies/feat-bodies.csproj" />
+  <Project Path="feat-flight-computer/feat-flight-computer.csproj" />
 
 </Solution>
