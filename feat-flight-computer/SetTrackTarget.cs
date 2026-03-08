@@ -1,9 +1,11 @@
 using System;
+using System.Threading.Tasks;
 using GenHTTP.Api.Content;
 using GenHTTP.Api.Protocol;
 using GenHTTP.Modules.Conversion;
 using GenHTTP.Modules.Functional;
 using KSA;
+using KROC.GameStateUpdater;
 
 namespace KROC.FeatFlightComputer;
 
@@ -19,34 +21,33 @@ public static class SetTrackTarget
     {
         return Inline.Create()
             .Serializers(Serialization.Default())
-            .Post((SetTrackTargetRequest body) =>
+            .Post(async (SetTrackTargetRequest body) =>
             {
+                // Validation only — no game state access
+                if (string.IsNullOrWhiteSpace(body.Target))
+                    throw new ProviderException(ResponseStatus.BadRequest, "Missing target.");
+
+                if (!Enum.TryParse<FlightComputerAttitudeTrackTarget>(body.Target, ignoreCase: true, out var target))
+                    throw new ProviderException(ResponseStatus.BadRequest,
+                        $"Invalid target '{body.Target}'. Valid: None, Custom, Forward, Backward, Up, Down, " +
+                        "Ahead, Behind, RadialOut, RadialIn, Prograde, Retrograde, Normal, AntiNormal, " +
+                        "Outward, Inward, PositiveDv, NegativeDv, Toward, Away, Antivel, Align.");
+
                 try
                 {
-                    var v = Program.ControlledVehicle;
-                    if (v is null)
-                        return (object)new { status = "error", message = "No active vehicle" };
-
-                    if (string.IsNullOrWhiteSpace(body.Target))
-                        throw new ProviderException(ResponseStatus.BadRequest, "Missing target.");
-
-                    if (!Enum.TryParse<FlightComputerAttitudeTrackTarget>(body.Target, ignoreCase: true, out var target))
-                        throw new ProviderException(ResponseStatus.BadRequest,
-                            $"Invalid target '{body.Target}'. Valid: None, Custom, Forward, Backward, Up, Down, " +
-                            "Ahead, Behind, RadialOut, RadialIn, Prograde, Retrograde, Normal, AntiNormal, " +
-                            "Outward, Inward, PositiveDv, NegativeDv, Toward, Away, Antivel, Align.");
-
-                    // Use SetEnum which also updates the navball frame
-                    v.SetEnum(target);
-
-                    return (object)new
+                    var capturedTarget = target;
+                    var result = await GameThread.Scheduler.Schedule(() =>
                     {
-                        status = "ok",
-                        data = new
-                        {
-                            target = target.ToString(),
-                        }
-                    };
+                        var v = Program.ControlledVehicle;
+                        if (v is null)
+                            throw new ProviderException(ResponseStatus.BadRequest, "No active vehicle.");
+
+                        // Use SetEnum which also updates the navball frame
+                        v.SetEnum(capturedTarget);
+                        return new { target = capturedTarget.ToString() };
+                    });
+
+                    return (object)new { status = "ok", data = result };
                 }
                 catch (ProviderException)
                 {

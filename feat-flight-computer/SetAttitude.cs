@@ -1,10 +1,12 @@
 using System;
+using System.Threading.Tasks;
 using Brutal.Numerics;
 using GenHTTP.Api.Content;
 using GenHTTP.Api.Protocol;
 using GenHTTP.Modules.Conversion;
 using GenHTTP.Modules.Functional;
 using KSA;
+using KROC.GameStateUpdater;
 
 namespace KROC.FeatFlightComputer;
 
@@ -29,42 +31,44 @@ public static class SetAttitude
     {
         return Inline.Create()
             .Serializers(Serialization.Default())
-            .Post((SetAttitudeRequest body) =>
+            .Post(async (SetAttitudeRequest body) =>
             {
+                // Validation only — no game state access
+                var frame = VehicleReferenceFrame.EclBody;
+                if (!string.IsNullOrWhiteSpace(body.Frame))
+                {
+                    if (!Enum.TryParse<VehicleReferenceFrame>(body.Frame, ignoreCase: true, out var parsed))
+                        throw new ProviderException(ResponseStatus.BadRequest,
+                            $"Invalid frame '{body.Frame}'. Valid: EclBody, EnuBody, Lvlh, VlfBody, BurnBody, Dock.");
+                    frame = parsed;
+                }
+
                 try
                 {
-                    var v = Program.ControlledVehicle;
-                    if (v is null)
-                        return (object)new { status = "error", message = "No active vehicle" };
-
-                    // Parse frame, default to EclBody
-                    var frame = VehicleReferenceFrame.EclBody;
-                    if (!string.IsNullOrWhiteSpace(body.Frame))
+                    var capturedFrame = frame;
+                    var result = await GameThread.Scheduler.Schedule(() =>
                     {
-                        if (!Enum.TryParse<VehicleReferenceFrame>(body.Frame, ignoreCase: true, out var parsed))
-                            throw new ProviderException(ResponseStatus.BadRequest,
-                                $"Invalid frame '{body.Frame}'. Valid: EclBody, EnuBody, Lvlh, VlfBody, BurnBody, Dock.");
-                        frame = parsed;
-                    }
+                        var v = Program.ControlledVehicle;
+                        if (v is null)
+                            throw new ProviderException(ResponseStatus.BadRequest, "No active vehicle.");
 
-                    var fc = v.FlightComputer;
-                    fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
-                    fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
-                    fc.AttitudeFrame = frame;
-                    fc.CustomAttitudeTarget = new double3(body.Roll, body.Yaw, body.Pitch);
+                        var fc = v.FlightComputer;
+                        fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
+                        fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
+                        fc.AttitudeFrame = capturedFrame;
+                        fc.CustomAttitudeTarget = new double3(body.Roll, body.Yaw, body.Pitch);
 
-                    return (object)new
-                    {
-                        status = "ok",
-                        data = new
+                        return new
                         {
                             mode = "Custom",
-                            frame = frame.ToString(),
+                            frame = capturedFrame.ToString(),
                             rollRad = body.Roll,
                             yawRad = body.Yaw,
                             pitchRad = body.Pitch,
-                        }
-                    };
+                        };
+                    });
+
+                    return (object)new { status = "ok", data = result };
                 }
                 catch (ProviderException)
                 {
