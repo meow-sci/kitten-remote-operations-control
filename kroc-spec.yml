@@ -114,6 +114,113 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /vehicle/telemetry:
+    get:
+      summary: Get full kinematic telemetry of the controlled vehicle
+      description: |
+        Returns a complete kinematic snapshot of the currently controlled vehicle:
+        position and velocity in ecliptic frame, body-frame acceleration vector
+        and its scalar magnitude, total/inert/propellant masses, and the current
+        simulation time in seconds.
+
+        Use this endpoint in the brachistochrone transfer planner. Poll it at a
+        fixed interval (e.g. every 3 s) and combine with `/bodies/predict/{id}`
+        to continuously recompute the burn heading and flip countdown.
+
+        Note: `accelerationMps2` reflects actual measured acceleration. It will
+        read ~0 while engines are cut for a refill; use a fixed planning value
+        from your ship spec in that case.
+      operationId: getVehicleTelemetry
+      responses:
+        '200':
+          description: Telemetry snapshot retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleTelemetryResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /bodies/list:
+    get:
+      summary: List all celestial bodies
+      description: Returns all celestial bodies (planets, moons, stars) in the current system. Vehicles are excluded.
+      operationId: listBodies
+      responses:
+        '200':
+          description: Body list retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BodiesListResponse'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /bodies/state/{id}:
+    get:
+      summary: Get current state of a celestial body
+      description: Returns the current ecliptic-frame position and velocity of the named body.
+      operationId: getBodyState
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: mars
+      responses:
+        '200':
+          description: Body state retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BodyStateResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /bodies/predict/{id}:
+    get:
+      summary: Predict future state of a celestial body
+      description: |
+        Returns the analytically-computed ecliptic-frame position and velocity
+        of the body at a specific simulation time using KSA's Keplerian
+        propagator — no linear approximation, exact for any time offset.
+
+        This is the key endpoint for the brachistochrone intercept iteration:
+        pass your estimated arrival `simTimeSec`, receive Mars's exact position
+        at that moment, recompute trip time, repeat until converged.
+      operationId: predictBodyState
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          example: mars
+        - name: simTimeSec
+          in: query
+          required: true
+          description: Target simulation time in seconds (from Universe epoch).
+          schema:
+            type: number
+            format: double
+          example: 9720000
+      responses:
+        '200':
+          description: Predicted body state retrieved successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BodyPredictResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
 components:
   schemas:
     VehicleListItem:
@@ -236,6 +343,119 @@ components:
                 status:
                   type: string
                   enum: [refilled]
+
+    Vec3:
+      type: object
+      description: A 3-component vector in ecliptic frame (metres or m/s).
+      required: [x, y, z]
+      properties:
+        x: { type: number, format: double }
+        y: { type: number, format: double }
+        z: { type: number, format: double }
+
+    VehicleTelemetryData:
+      type: object
+      required: [simTimeSec, positionEcl, velocityEcl, accelerationBody, accelerationMps2, totalMassKg, inertMassKg, propellantMassKg]
+      properties:
+        simTimeSec:
+          type: number
+          format: double
+          description: Current simulation time in seconds since the universe epoch.
+        positionEcl:
+          $ref: '#/components/schemas/Vec3'
+          description: Ecliptic-frame position in metres.
+        velocityEcl:
+          $ref: '#/components/schemas/Vec3'
+          description: Ecliptic-frame velocity in m/s.
+        accelerationBody:
+          $ref: '#/components/schemas/Vec3'
+          description: Body-frame acceleration vector in m/s² (measured; ~0 when engines are cut).
+        accelerationMps2:
+          type: number
+          format: double
+          description: Scalar magnitude of accelerationBody in m/s².
+        totalMassKg:
+          type: number
+          format: double
+          description: Total wet mass in kg.
+        inertMassKg:
+          type: number
+          format: double
+          description: Dry/structural mass in kg.
+        propellantMassKg:
+          type: number
+          format: double
+          description: Current propellant mass in kg.
+
+    VehicleTelemetryResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status: { type: string, enum: [ok] }
+        data:
+          $ref: '#/components/schemas/VehicleTelemetryData'
+
+    BodiesListItem:
+      type: object
+      required: [id, class, meanRadiusM]
+      properties:
+        id: { type: string, example: mars }
+        class: { type: string, example: Planet }
+        meanRadiusM:
+          type: number
+          format: double
+          description: Mean radius of the body in metres.
+
+    BodiesListResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status: { type: string, enum: [ok] }
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/BodiesListItem'
+
+    BodyStateData:
+      type: object
+      required: [id, class, positionEcl, velocityEcl]
+      properties:
+        id: { type: string, example: mars }
+        class: { type: string, example: Planet }
+        positionEcl:
+          $ref: '#/components/schemas/Vec3'
+        velocityEcl:
+          $ref: '#/components/schemas/Vec3'
+
+    BodyStateResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status: { type: string, enum: [ok] }
+        data:
+          $ref: '#/components/schemas/BodyStateData'
+
+    BodyPredictData:
+      type: object
+      required: [id, atSimTimeSec, positionEcl, velocityEcl]
+      properties:
+        id: { type: string, example: mars }
+        atSimTimeSec:
+          type: number
+          format: double
+          description: The simulation time at which the prediction was computed.
+        positionEcl:
+          $ref: '#/components/schemas/Vec3'
+        velocityEcl:
+          $ref: '#/components/schemas/Vec3'
+
+    BodyPredictResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status: { type: string, enum: [ok] }
+        data:
+          $ref: '#/components/schemas/BodyPredictData'
 
     ErrorResponse:
       type: object

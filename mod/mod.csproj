@@ -17,6 +17,7 @@
     <ProjectReference Include="..\server\server.csproj" />
     <ProjectReference Include="..\feat-ping\feat-ping.csproj" />
     <ProjectReference Include="..\feat-vehicle-data\feat-vehicle-data.csproj" />
+    <ProjectReference Include="..\feat-bodies\feat-bodies.csproj" />
   </ItemGroup>
 
   <!-- Copies files for mod deployment -->

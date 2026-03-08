@@ -19,6 +19,7 @@ public sealed class VehicleDataModule : IEndpointModule
 
         routes.Add("vehicle", Layout.Create()
             .Add("data", dataLayout)
-            .Add("actions", actionsLayout));
+            .Add("actions", actionsLayout)
+            .Add("telemetry", GetVehicleTelemetry.Create())); // GET /vehicle/telemetry
     }
 }

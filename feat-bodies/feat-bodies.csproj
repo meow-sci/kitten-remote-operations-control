@@ -2,10 +2,10 @@
 
   <PropertyGroup>
     <OutputType>Library</OutputType>
-    <AssemblyName>KROC.FeatVehicleData</AssemblyName>
-    <RootNamespace>KROC.FeatVehicleData</RootNamespace>
-    <Description>VehicleData feature module for KROC</Description>
-    <PackageId>KROC.FeatVehicleData</PackageId>
+    <AssemblyName>KROC.FeatBodies</AssemblyName>
+    <RootNamespace>KROC.FeatBodies</RootNamespace>
+    <Description>Bodies feature module for KROC — exposes celestial body state and future predictions</Description>
+    <PackageId>KROC.FeatBodies</PackageId>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +20,5 @@
       <HintPath>$(KSAFolder)\Brutal.Core.Numerics.dll</HintPath>
     </Reference>
   </ItemGroup>
-
 
 </Project>

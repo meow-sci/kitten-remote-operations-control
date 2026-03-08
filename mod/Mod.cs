@@ -8,6 +8,7 @@ using KSA;
 using KROC.Server;
 using KROC.FeatPing;
 using KROC.FeatVehicleData;
+using KROC.FeatBodies;
 
 namespace KROC;
 
@@ -36,7 +37,8 @@ public class Mod
       _server = new KrocServer(config, new List<IEndpointModule>
       {
         new PingModule(),
-        new VehicleDataModule()
+        new VehicleDataModule(),
+        new BodiesModule()
       });
       _ = _server.StartAsync().ContinueWith(t =>
       {
