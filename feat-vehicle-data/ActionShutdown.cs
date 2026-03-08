@@ -1,10 +1,12 @@
 using System;
 using System.Linq;
+using System.Threading.Tasks;
 using GenHTTP.Api.Content;
 using GenHTTP.Api.Protocol;
 using GenHTTP.Modules.Conversion;
 using GenHTTP.Modules.Functional;
 using KSA;
+using KROC.GameStateUpdater;
 
 namespace KROC.FeatVehicleData;
 
@@ -14,22 +16,26 @@ public static class ActionShutdown
     {
         return Inline.Create()
             .Serializers(Serialization.Default())
-            .Post((VehicleActionRequest body) =>
+            .Post(async (VehicleActionRequest body) =>
             {
                 if (string.IsNullOrWhiteSpace(body.VehicleId))
                     throw new ProviderException(ResponseStatus.BadRequest, "Missing or invalid vehicleId.");
 
                 try
                 {
-                    var vehicles = Universe.CurrentSystem?.Vehicles.GetList() ?? Enumerable.Empty<Vehicle>();
-                    var vehicle = vehicles.FirstOrDefault(v => v.Id == body.VehicleId);
+                    var result = await GameThread.Scheduler.Schedule(() =>
+                    {
+                        var vehicles = Universe.CurrentSystem?.Vehicles.GetList() ?? Enumerable.Empty<Vehicle>();
+                        var vehicle = vehicles.FirstOrDefault(v => v.Id == body.VehicleId);
 
-                    if (vehicle is null)
-                        throw new ProviderException(ResponseStatus.NotFound, $"Vehicle not found: {body.VehicleId}.");
+                        if (vehicle is null)
+                            throw new ProviderException(ResponseStatus.NotFound, $"Vehicle not found: {body.VehicleId}.");
 
-                    vehicle.SetEnum(VehicleEngine.MainShutdown);
+                        vehicle.SetEnum(VehicleEngine.MainShutdown);
+                        return new VehicleActionResult(body.VehicleId, "shutdown");
+                    });
 
-                    return (object)new ApiResponse<VehicleActionResult>("ok", new VehicleActionResult(body.VehicleId, "shutdown"));
+                    return (object)new ApiResponse<VehicleActionResult>("ok", result);
                 }
                 catch (ProviderException)
                 {
