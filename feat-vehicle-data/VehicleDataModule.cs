@@ -14,7 +14,8 @@ public sealed class VehicleDataModule : IEndpointModule
 
         var actionsLayout = Layout.Create()
             .Add("ignite", ActionIgnite.Create())
-            .Add("shutdown", ActionShutdown.Create());
+            .Add("shutdown", ActionShutdown.Create())
+            .Add("refill", ActionRefill.Create());
 
         routes.Add("vehicle", Layout.Create()
             .Add("data", dataLayout)

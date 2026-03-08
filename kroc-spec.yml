@@ -89,6 +89,31 @@ paths:
         '500':
           $ref: '#/components/responses/InternalServerError'
 
+  /vehicle/actions/refill:
+    post:
+      summary: Refill vehicle consumables
+      description: Refills all consumables (fuel, etc.) on the specified vehicle by calling its RefillConsumables() method.
+      operationId: refillVehicle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VehicleActionRequest'
+      responses:
+        '200':
+          description: Refill command sent successfully.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VehicleActionRefillResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
 components:
   schemas:
     VehicleListItem:
@@ -196,6 +221,21 @@ components:
                 status:
                   type: string
                   enum: [shutdown]
+
+    VehicleActionRefillResponse:
+      type: object
+      required: [status, data]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        data:
+          allOf:
+            - $ref: '#/components/schemas/VehicleActionResult'
+            - properties:
+                status:
+                  type: string
+                  enum: [refilled]
 
     ErrorResponse:
       type: object

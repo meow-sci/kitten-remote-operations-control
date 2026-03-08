@@ -308,7 +308,83 @@ vehicle.SetEnum(VehicleEngine.MainShutdown);
 
 ---
 
-## [ ] Task 5: OpenAPI Spec Coverage
+## [ ] Task 5: Refill Vehicle Consumables
+
+**Endpoint:** `POST /vehicle/actions/refill`
+
+**Description:** Sends a refill command to the vehicle identified by `vehicleId` in the request body, refilling all consumables (fuel, etc.).
+
+**Response shape (success):**
+```json
+{ "status": "ok", "data": { "vehicleId": "vehicle-123", "status": "refilled" } }
+```
+
+**Response shape (error):**
+```json
+{ "status": "error", "message": "Missing or invalid vehicleId." }
+```
+```json
+{ "status": "error", "message": "Vehicle not found: vehicle-999." }
+```
+
+**HTTP status codes:**
+- 200 — refill command sent successfully
+- 400 — `vehicleId` is missing or empty
+- 404 — no vehicle with the given ID found in the current system
+- 500 — unexpected error
+
+**KSA game code required:**
+```csharp
+using KSA;
+
+var vehicles = Universe.CurrentSystem?.Vehicles.GetList() ?? Enumerable.Empty<Vehicle>();
+var vehicle  = vehicles.FirstOrDefault(v => v.Id == vehicleId);
+
+if (vehicle is null)
+    // return 404
+
+vehicle.RefillConsumables();
+```
+
+**GenHTTP handler sketch:**
+```csharp
+// VehicleActionRequest and VehicleActionResult records are shared with Task 3.
+
+// Inside the actions layout (alongside "ignite" and "shutdown"):
+.Add("refill", Inline.Create().Post((VehicleActionRequest body) =>
+{
+    if (string.IsNullOrWhiteSpace(body.VehicleId))
+        throw new ProviderException(ResponseStatus.BadRequest, "Missing or invalid vehicleId.");
+
+    var vehicles = Universe.CurrentSystem?.Vehicles.GetList() ?? Enumerable.Empty<Vehicle>();
+    var vehicle  = vehicles.FirstOrDefault(v => v.Id == body.VehicleId);
+
+    if (vehicle is null)
+        throw new ProviderException(ResponseStatus.NotFound, $"Vehicle not found: {body.VehicleId}.");
+
+    try
+    {
+        vehicle.RefillConsumables();
+        return new ApiResponse<VehicleActionResult>("ok", new VehicleActionResult(body.VehicleId, "refilled"));
+    }
+    catch (Exception ex)
+    {
+        throw new ProviderException(ResponseStatus.InternalServerError,
+            "Unexpected error refilling vehicle.", ex);
+    }
+}));
+```
+
+**Acceptance criteria:**
+- `POST /vehicle/actions/refill` with `{ "vehicleId": "<id>" }` returns `200` and calls `Universe.Refill(body.VehicleId)`.
+- Missing or empty `vehicleId` returns `400`.
+- An unknown `vehicleId` returns `404` with the ID echoed in the message.
+- `data.status` in the success response is exactly `"refilled"`.
+- `data.vehicleId` in the success response matches the input `vehicleId`.
+
+---
+
+## [ ] Task 6: OpenAPI Spec Coverage
 
 **File:** `kroc-spec.yml` (project root)
 
@@ -322,6 +398,7 @@ vehicle.SetEnum(VehicleEngine.MainShutdown);
 | GET    | `/vehicle/data/current`     | Get currently controlled vehicle |
 | POST   | `/vehicle/actions/ignite`   | Ignite vehicle engine            |
 | POST   | `/vehicle/actions/shutdown` | Shutdown vehicle engine          |
+| POST   | `/vehicle/actions/refill`   | Refill vehicle consumables       |
 
 **Acceptance criteria:**
 - `kroc-spec.yml` exists at the project root and is valid OpenAPI 3.x.
