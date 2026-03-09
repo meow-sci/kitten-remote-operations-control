@@ -119,17 +119,20 @@ paths:
       summary: Get full kinematic telemetry of the controlled vehicle
       description: |
         Returns a complete kinematic snapshot of the currently controlled vehicle:
-        position and velocity in ecliptic frame, body-frame acceleration vector
-        and its scalar magnitude, total/inert/propellant masses, and the current
-        simulation time in seconds.
+        position and velocity in ecliptic frame, measured acceleration in both
+        body and ecliptic frames, live net engine thrust/exhaust direction in
+        ecliptic space, total/inert/propellant masses, and the current simulation
+        time in seconds.
 
         Use this endpoint in the brachistochrone transfer planner. Poll it at a
         fixed interval (e.g. every 3 s) and combine with `/bodies/predict/{id}`
         to continuously recompute the burn heading and flip countdown.
 
-        Note: `accelerationMps2` reflects actual measured acceleration. It will
-        read ~0 while engines are cut for a refill; use a fixed planning value
-        from your ship spec in that case.
+        Note: `thrustDirectionEcl` is derived from the live sum of all active
+        rocket nozzle forces, so it tracks gimbal deflection and clustered
+        engines directly. `accelerationMps2` reflects actual measured net
+        acceleration and will read ~0 while engines are cut for a refill; use a
+        fixed planning value from your ship spec in that case.
       operationId: getVehicleTelemetry
       responses:
         '200':
@@ -438,7 +441,7 @@ components:
 
     VehicleTelemetryData:
       type: object
-      required: [simTimeSec, positionEcl, velocityEcl, accelerationBody, accelerationMps2, totalMassKg, inertMassKg, propellantMassKg]
+      required: [simTimeSec, positionEcl, velocityEcl, accelerationBody, accelerationEcl, accelerationMps2, totalMassKg, inertMassKg, propellantMassKg, twrCurrent, twrMax, maxAccelMps2, parentBodyId, activeEngineThrustN, thrustDirectionEcl, exhaustDirectionEcl, navballFrame, navballPitchDeg, navballYawDeg, navballRollDeg, bodyForwardEcl, bodyUpEcl]
       properties:
         simTimeSec:
           type: number
@@ -453,6 +456,9 @@ components:
         accelerationBody:
           $ref: '#/components/schemas/Vec3'
           description: Body-frame acceleration vector in m/s² (measured; ~0 when engines are cut).
+        accelerationEcl:
+          $ref: '#/components/schemas/Vec3'
+          description: Measured acceleration transformed into the vehicle parent body's ecliptic frame.
         accelerationMps2:
           type: number
           format: double
@@ -484,6 +490,48 @@ components:
             Maximum acceleration in m/s² = twrMax × parent-body surface g.
             Use this as the planning acceleration for brachistochrone calculations.
             Valid even when engines are cut (it reflects ship capability, not current thrust).
+        parentBodyId:
+          type: string
+          description: |
+            Id of the current parent/reference body for the controlled vehicle.
+            Use this with `/bodies/state/{id}` to reconstruct relative-state navball frames such as
+            EnuBody, Lvlh, and VlfBody.
+          example: earth
+        activeEngineThrustN:
+          type: number
+          format: double
+          description: Live summed thrust from all currently firing rocket nozzles in newtons.
+        thrustDirectionEcl:
+          anyOf:
+            - $ref: '#/components/schemas/Vec3'
+            - type: 'null'
+          description: |
+            Normalized net engine thrust direction in ecliptic coordinates.
+            Null when no engine nozzle is currently producing thrust.
+        exhaustDirectionEcl:
+          anyOf:
+            - $ref: '#/components/schemas/Vec3'
+            - type: 'null'
+          description: |
+            Normalized net exhaust direction in ecliptic coordinates.
+            This is the opposite of thrustDirectionEcl and null under the same conditions.
+        navballFrame:
+          type: string
+          description: Current game navball reference frame.
+          example: EclBody
+        navballPitchDeg:
+          type: integer
+          description: Pitch value currently shown by the game's navball digit display.
+        navballYawDeg:
+          type: integer
+          description: Yaw value currently shown by the game's navball digit display.
+        navballRollDeg:
+          type: integer
+          description: Roll value currently shown by the game's navball digit display.
+        bodyForwardEcl:
+          $ref: '#/components/schemas/Vec3'
+        bodyUpEcl:
+          $ref: '#/components/schemas/Vec3'
 
     VehicleTelemetryResponse:
       type: object

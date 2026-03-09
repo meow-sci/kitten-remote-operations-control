@@ -16,10 +16,11 @@ namespace KROC.FeatFlightComputer;
 /// Sets the flight computer to hold a custom attitude (euler angles) in a
 /// chosen reference frame. Switches to Auto + Custom tracking mode.
 ///
-/// The EclBody frame is ecliptic-inertial, so you can convert an ecliptic
-/// direction vector (lon, lat) directly:
-///   yaw   = longitude in radians
-///   pitch = latitude in radians
+/// For EclBody, the custom attitude uses KSA's Roll-Yaw-Pitch convention over
+/// XZY rotation order. To point the frame +X axis at an ecliptic heading
+/// vector h = (x, y, z), use:
+///   yaw   = -asin(y)
+///   pitch = atan2(z, x)
 ///   roll  = 0
 ///
 /// Euler order for all frames except EnuBody is Roll-Yaw-Pitch.

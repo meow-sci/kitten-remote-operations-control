@@ -37,14 +37,14 @@ import { useState, useEffect, useRef } from "react";
 // ── Config ────────────────────────────────────────────────────────────────────
 
 const BASE_URL = process.env.KROC_URL ?? "http://localhost:7887";
-const TARGET_ID = Bun.argv[2] ?? "mars";
+const TARGET_ID = Bun.argv[2] ?? "Mars";
 const VEHICLE_ID = Bun.argv[3] ?? null;  // optional — enables continuous refill loop
 const HOLD_HEADING = Bun.argv.includes("--hold") || process.env.HOLD_HEADING === "1";
 const POLL_MS = 250;
-const REFILL_MS = 100;
+const REFILL_MS = 25;
 const MAX_ITERS = 12;
 const CONVERGE_EPS = 0.0001; // 0.01% trip-time change → converged
-const EARTH_ID = "earth";
+const EARTH_ID = "Earth";
 
 const SCAN_STEP_SEC = 259200;    // 3 days   — coarse scan step
 const SCAN_WINDOW_SEC = 67392000;  // ~780 days — one synodic period
@@ -80,6 +80,7 @@ interface TelemetryData {
   positionEcl: Vec3;
   velocityEcl: Vec3;
   accelerationBody: Vec3;
+  accelerationEcl: Vec3;
   accelerationMps2: number;
   totalMassKg: number;
   inertMassKg: number;
@@ -87,6 +88,16 @@ interface TelemetryData {
   twrCurrent: number;
   twrMax: number;
   maxAccelMps2: number;
+  parentBodyId: string;
+  activeEngineThrustN: number;
+  thrustDirectionEcl: Vec3 | null;
+  exhaustDirectionEcl: Vec3 | null;
+  navballFrame: string;
+  navballPitchDeg: number;
+  navballYawDeg: number;
+  navballRollDeg: number;
+  bodyForwardEcl: Vec3;
+  bodyUpEcl: Vec3;
 }
 
 interface BodyStateData {
@@ -119,9 +130,18 @@ interface FlightComputerState {
   attitudeMode: string;
   trackTarget: string;
   frame: string;
+  customRollRad: number;
+  customYawRad: number;
+  customPitchRad: number;
   errorRollDeg: number;
   errorYawDeg: number;
   errorPitchDeg: number;
+}
+
+interface AttitudeAngles {
+  rollRad: number;
+  yawRad: number;
+  pitchRad: number;
 }
 
 interface BrachistochronePlan {
@@ -150,6 +170,26 @@ interface ScanState {
   nextRefreshMs: number;  // wall-clock ms of next scheduled refresh
 }
 
+interface NavballDigits {
+  pitchDeg: number;
+  yawDeg: number;
+  rollDeg: number;
+}
+
+interface DerivedNavballComparison {
+  digits: NavballDigits | null;
+  exact: boolean;
+  note: string;
+}
+
+interface BurnSafetyAnalysis {
+  progradeAngleDeg: number;
+  radialOutAngleDeg: number;
+  progradeComponent: number;
+  radialOutComponent: number;
+  warning: string | null;
+}
+
 // ── Vector math ───────────────────────────────────────────────────────────────
 
 function len(v: Vec3) { return Math.sqrt(v.x ** 2 + v.y ** 2 + v.z ** 2); }
@@ -160,6 +200,14 @@ function sub(a: Vec3, b: Vec3): Vec3 {
 
 function dot(a: Vec3, b: Vec3): number {
   return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+function cross(a: Vec3, b: Vec3): Vec3 {
+  return {
+    x: a.y * b.z - a.z * b.y,
+    y: a.z * b.x - a.x * b.z,
+    z: a.x * b.y - a.y * b.x,
+  };
 }
 
 function norm(v: Vec3): Vec3 {
@@ -180,6 +228,206 @@ function angularSepDeg(posA: Vec3, posB: Vec3): number {
   const b = norm(posB);
   const crossZ = a.x * b.y - a.y * b.x;
   return Math.atan2(crossZ, dot(a, b)) * 180 / Math.PI;
+}
+
+function headingToEclBodyAngles(heading: Vec3): AttitudeAngles {
+  const u = norm(heading);
+  return {
+    rollRad: 0,
+    yawRad: -Math.asin(Math.max(-1, Math.min(1, u.y))),
+    pitchRad: Math.atan2(u.z, u.x),
+  };
+}
+
+function headingToSphericalAngles(heading: Vec3): AttitudeAngles {
+  const u = norm(heading);
+  return {
+    rollRad: 0,
+    yawRad: Math.atan2(u.y, u.x),
+    pitchRad: Math.asin(Math.max(-1, Math.min(1, u.z))),
+  };
+}
+
+function negate(v: Vec3): Vec3 {
+  return { x: -v.x, y: -v.y, z: -v.z };
+}
+
+function frameUsesParentState(frame: string): boolean {
+  return frame === "EnuBody" || frame === "Lvlh" || frame === "VlfBody";
+}
+
+function compassRad(rad: number): number {
+  const tau = Math.PI * 2;
+  let value = rad % tau;
+  if (value < 0) value += tau;
+  if (Math.abs(Math.PI - value) < 1e-9) value = 0;
+  return value;
+}
+
+function angleToNavballDeg(rad: number): number {
+  return Math.round(compassRad(rad) * 180 / Math.PI) % 360;
+}
+
+function headingToNavballDigits(headingFrame: Vec3): NavballDigits {
+  const u = norm(headingFrame);
+  const yawRad = -Math.asin(Math.max(-1, Math.min(1, u.y)));
+  const pitchRad = Math.atan2(u.z, u.x);
+  return {
+    pitchDeg: angleToNavballDeg(pitchRad),
+    yawDeg: angleToNavballDeg(yawRad),
+    rollDeg: 0,
+  };
+}
+
+function signedNavballDeltaDeg(actual: number, expected: number): number {
+  return ((expected - actual + 540) % 360) - 180;
+}
+
+function fmtSignedNavballDelta(deltaDeg: number): string {
+  return `${deltaDeg >= 0 ? "+" : ""}${Math.round(deltaDeg)}`;
+}
+
+function fmtNavballDelta(actual: NavballDigits, expected: NavballDigits): string {
+  return [
+    `P ${fmtSignedNavballDelta(signedNavballDeltaDeg(actual.pitchDeg, expected.pitchDeg))}`,
+    `Y ${fmtSignedNavballDelta(signedNavballDeltaDeg(actual.yawDeg, expected.yawDeg))}`,
+    `R ${fmtSignedNavballDelta(signedNavballDeltaDeg(actual.rollDeg, expected.rollDeg))}`,
+  ].join("  ");
+}
+
+function resolveHeadingInNavballFrame(
+  headingEcl: Vec3,
+  telemetry: TelemetryData,
+  parentState: BodyStateData | null,
+): DerivedNavballComparison {
+  const frame = telemetry.navballFrame;
+  const heading = norm(headingEcl);
+
+  if (frame === "EclBody") {
+    return {
+      digits: headingToNavballDigits({ x: heading.x, y: -heading.y, z: -heading.z }),
+      exact: true,
+      note: "exact in EclBody",
+    };
+  }
+
+  if (frame === "BurnBody") {
+    return { digits: null, exact: false, note: "burn-frame basis unavailable from current telemetry" };
+  }
+
+  if (frame === "Dock") {
+    return { digits: null, exact: false, note: "dock-frame target orientation unavailable from current telemetry" };
+  }
+
+  if (!parentState) {
+    return { digits: null, exact: false, note: `waiting for parent body state (${telemetry.parentBodyId})` };
+  }
+
+  const relPos = sub(telemetry.positionEcl, parentState.positionEcl);
+  const relVel = sub(telemetry.velocityEcl, parentState.velocityEcl);
+  const up = norm(relPos);
+
+  if (len(relPos) < 1e-9) {
+    return { digits: null, exact: false, note: "relative position is degenerate for navball frame derivation" };
+  }
+
+  if (frame === "EnuBody") {
+    const eastRaw = cross({ x: 0, y: 0, z: 1 }, relPos);
+    if (len(eastRaw) < 1e-9) {
+      return { digits: null, exact: false, note: "ENU is singular near the parent pole" };
+    }
+
+    const east = norm(eastRaw);
+    const north = norm(cross(up, east));
+    return {
+      digits: headingToNavballDigits({
+        x: dot(heading, east),
+        y: -dot(heading, north),
+        z: -dot(heading, up),
+      }),
+      exact: true,
+      note: `exact in ${frame}`,
+    };
+  }
+
+  if (len(relVel) < 1e-9) {
+    return { digits: null, exact: false, note: `${frame} is singular at near-zero relative velocity` };
+  }
+
+  if (frame === "Lvlh") {
+    const down = negate(up);
+    const side = norm(cross(down, norm(relVel)));
+    if (len(side) < 1e-9) {
+      return { digits: null, exact: false, note: "LVLH is singular when radial and velocity vectors collapse" };
+    }
+
+    const ahead = norm(cross(side, down));
+    return {
+      digits: headingToNavballDigits({
+        x: dot(heading, ahead),
+        y: dot(heading, side),
+        z: dot(heading, down),
+      }),
+      exact: true,
+      note: "exact in Lvlh",
+    };
+  }
+
+  if (frame === "VlfBody") {
+    const velocity = norm(relVel);
+    const normal = norm(cross(up, velocity));
+    if (len(normal) < 1e-9) {
+      return { digits: null, exact: false, note: "VLF is singular when radial and velocity vectors collapse" };
+    }
+
+    const outward = norm(cross(velocity, normal));
+    return {
+      digits: headingToNavballDigits({
+        x: dot(heading, velocity),
+        y: -dot(heading, normal),
+        z: -dot(heading, outward),
+      }),
+      exact: true,
+      note: "exact in VlfBody",
+    };
+  }
+
+  return { digits: null, exact: false, note: `${frame} frame is not yet derived in the TUI` };
+}
+
+function analyzeBurnSafety(
+  headingEcl: Vec3,
+  telemetry: TelemetryData | null,
+  parentBody: BodyStateData | null,
+): BurnSafetyAnalysis | null {
+  if (!telemetry || !parentBody) return null;
+
+  const relPos = sub(telemetry.positionEcl, parentBody.positionEcl);
+  const relVel = sub(telemetry.velocityEcl, parentBody.velocityEcl);
+  if (len(relPos) < 1e-9 || len(relVel) < 1e-9) return null;
+
+  const heading = norm(headingEcl);
+  const radialOut = norm(relPos);
+  const prograde = norm(relVel);
+  const progradeComponent = dot(heading, prograde);
+  const radialOutComponent = dot(heading, radialOut);
+  const progradeAngleDeg = Math.acos(Math.max(-1, Math.min(1, progradeComponent))) * 180 / Math.PI;
+  const radialOutAngleDeg = Math.acos(Math.max(-1, Math.min(1, radialOutComponent))) * 180 / Math.PI;
+
+  let warning: string | null = null;
+  if (progradeAngleDeg > 120) {
+    warning = `Unsafe burn: ${progradeAngleDeg.toFixed(0)}° from prograde around ${telemetry.parentBodyId}`;
+  } else if (radialOutComponent < -0.05) {
+    warning = `Unsafe burn: ${Math.abs(radialOutComponent).toFixed(2)} inward radial component toward ${telemetry.parentBodyId}`;
+  }
+
+  return {
+    progradeAngleDeg,
+    radialOutAngleDeg,
+    progradeComponent,
+    radialOutComponent,
+    warning,
+  };
 }
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
@@ -209,13 +457,11 @@ async function predictBody(id: string, simTimeSec: number): Promise<BodyPredictD
 }
 
 async function setFcHeading(heading: Vec3): Promise<void> {
-  const u = norm(heading);
-  const yaw = Math.atan2(u.y, u.x);
-  const pitch = Math.asin(Math.max(-1, Math.min(1, u.z)));
+  const { rollRad, yawRad, pitchRad } = headingToEclBodyAngles(heading);
   await fetch(`${BASE_URL}/flight-computer/attitude`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ roll: 0, yaw, pitch, frame: "EclBody" }),
+    body: JSON.stringify({ roll: rollRad, yaw: yawRad, pitch: pitchRad, frame: "EclBody" }),
   });
 }
 
@@ -395,10 +641,35 @@ function fmtVec(v: Vec3): string {
   return `[${v.x.toFixed(4)}, ${v.y.toFixed(4)}, ${v.z.toFixed(4)}]`;
 }
 
+function fmtForce(n: number): string {
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(2) + " MN";
+  if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(2) + " kN";
+  return n.toFixed(1) + " N";
+}
+
 function fmtMass(kg: number): string {
   if (kg >= 1e6) return (kg / 1e6).toFixed(2) + " Mt";
   if (kg >= 1e3) return (kg / 1e3).toFixed(2) + " t";
   return kg.toFixed(1) + " kg";
+}
+
+function fmtSignedDeg(rad: number): string {
+  const deg = rad * 180 / Math.PI;
+  return `${deg >= 0 ? "+" : ""}${deg.toFixed(1)}°`;
+}
+
+function fmtAttitude(angles: AttitudeAngles): string {
+  return `P ${fmtSignedDeg(angles.pitchRad)}  Y ${fmtSignedDeg(angles.yawRad)}  R ${fmtSignedDeg(angles.rollRad)}`;
+}
+
+function fmtNavballDigits(pitchDeg: number, yawDeg: number, rollDeg: number): string {
+  const fmt = (value: number) => String(((value % 360) + 360) % 360).padStart(3, "0");
+  return `P ${fmt(pitchDeg)}  Y ${fmt(yawDeg)}  R ${fmt(rollDeg)}`;
+}
+
+function angularErrorDeg(actual: Vec3 | null, expected: Vec3): number | null {
+  if (!actual || len(actual) < 1e-9 || len(expected) < 1e-9) return null;
+  return Math.acos(Math.max(-1, Math.min(1, dot(norm(actual), norm(expected))))) * 180 / Math.PI;
 }
 
 // ── Shared UI helpers ─────────────────────────────────────────────────────────
@@ -582,6 +853,7 @@ function BurnPanel({
   postFlip,
   accel,
   accelIsLive,
+  parentBody,
   fcState,
 }: {
   ship: TelemetryData;
@@ -589,21 +861,25 @@ function BurnPanel({
   postFlip: boolean;
   accel: number;
   accelIsLive: boolean;
+  parentBody: BodyStateData | null;
   fcState: FlightComputerState | null;
 }) {
   const activeHeading = postFlip ? plan.retroHeading : plan.burnHeading;
   return (
-    <box flexDirection="row" flexGrow={1} gap={1} padding={1}>
-      <box flexDirection="column" flexGrow={1} gap={1}>
-        <BurnCommandSection heading={activeHeading} postFlip={postFlip} />
-        <TimingSection ship={ship} plan={plan} postFlip={postFlip} />
-        <InterceptSection ship={ship} plan={plan} />
+    <box flexDirection="column" flexGrow={1} gap={1} padding={1}>
+      <box flexDirection="row" flexGrow={1} gap={1}>
+        <box flexDirection="column" flexGrow={1} gap={1}>
+          <BurnCommandSection heading={activeHeading} postFlip={postFlip} />
+          <TimingSection ship={ship} plan={plan} postFlip={postFlip} />
+          <InterceptSection ship={ship} plan={plan} />
+        </box>
+        <box flexDirection="column" flexGrow={1} gap={1}>
+          <LockedPlanSection plan={plan} />
+          <ShipStateSection ship={ship} plan={plan} accel={accel} accelIsLive={accelIsLive} />
+          {HOLD_HEADING && <FcSection fcState={fcState} />}
+        </box>
       </box>
-      <box flexDirection="column" flexGrow={1} gap={1}>
-        <LockedPlanSection plan={plan} />
-        <ShipStateSection ship={ship} plan={plan} accel={accel} accelIsLive={accelIsLive} />
-        {HOLD_HEADING && <FcSection fcState={fcState} />}
-      </box>
+      <AttitudeDebugSection heading={activeHeading} headingLabel={postFlip ? "Retro" : "Burn"} plan={plan} telemetry={ship} parentBody={parentBody} fcState={fcState} />
     </box>
   );
 }
@@ -709,6 +985,148 @@ function OrbitalBurnSection({ burnPoint }: { burnPoint: OrbitalBurnPoint | null 
   );
 }
 
+function AttitudeDebugSection({
+  heading,
+  headingLabel,
+  plan,
+  telemetry,
+  parentBody,
+  fcState,
+}: {
+  heading: Vec3;
+  headingLabel: string;
+  plan: BrachistochronePlan | null;
+  telemetry: TelemetryData | null;
+  parentBody: BodyStateData | null;
+  fcState: FlightComputerState | null;
+}) {
+  if (!plan) {
+    return (
+      <Section title="ATTITUDE DEBUG" accentColor={C.warn}>
+        <text fg={C.dim}>waiting for live plan…</text>
+      </Section>
+    );
+  }
+
+  const expected = headingToEclBodyAngles(heading);
+  const spherical = headingToSphericalAngles(heading);
+  const targetAngles = eclipticAngles(heading);
+  const burnSafety = analyzeBurnSafety(heading, telemetry, parentBody);
+  const bodyForwardAngles = telemetry ? eclipticAngles(telemetry.bodyForwardEcl) : null;
+  const bodyForwardErrorDeg = telemetry ? angularErrorDeg(telemetry.bodyForwardEcl, heading) : null;
+  const thrustAngles = telemetry?.thrustDirectionEcl ? eclipticAngles(telemetry.thrustDirectionEcl) : null;
+  const exhaustAngles = telemetry?.exhaustDirectionEcl ? eclipticAngles(telemetry.exhaustDirectionEcl) : null;
+  const thrustErrorDeg = telemetry ? angularErrorDeg(telemetry.thrustDirectionEcl, heading) : null;
+  const burnAxisErrorDeg = telemetry
+    ? angularErrorDeg(telemetry.thrustDirectionEcl ?? telemetry.bodyForwardEcl, heading)
+    : null;
+  const burnAxisSource = telemetry?.thrustDirectionEcl ? "thrust axis" : "body +X (FC target)";
+  const bodyToThrustCantDeg = telemetry?.thrustDirectionEcl
+    ? angularErrorDeg(telemetry.thrustDirectionEcl, telemetry.bodyForwardEcl)
+    : null;
+  const accelerationAngles = telemetry && telemetry.accelerationMps2 > 1e-9
+    ? eclipticAngles(telemetry.accelerationEcl)
+    : null;
+  const accelerationErrorDeg = telemetry && telemetry.accelerationMps2 > 1e-9
+    ? angularErrorDeg(telemetry.accelerationEcl, heading)
+    : null;
+  const actualNavball = telemetry ? {
+    pitchDeg: telemetry.navballPitchDeg,
+    yawDeg: telemetry.navballYawDeg,
+    rollDeg: telemetry.navballRollDeg,
+  } : null;
+  const derivedNavball = telemetry ? resolveHeadingInNavballFrame(heading, telemetry, parentBody) : null;
+  const fcAngles = fcState
+    ? {
+      rollRad: fcState.customRollRad,
+      yawRad: fcState.customYawRad,
+      pitchRad: fcState.customPitchRad,
+    }
+    : null;
+
+  return (
+    <Section title="ATTITUDE DEBUG" accentColor={C.warn}>
+      <Row label={`${headingLabel} vec:`} value={fmtVec(heading)} valueColor={C.cyan} />
+      <Row label="Target lon/lat:" value={`${targetAngles.lon.toFixed(1)}° / ${targetAngles.lat.toFixed(1)}°`} valueColor={C.accel} />
+      <Row label="Expect ECL:" value={fmtAttitude(expected)} valueColor={C.accel} />
+      <Row label="Spherical ref:" value={fmtAttitude(spherical)} valueColor={C.dim} />
+      {telemetry ? (
+        <>
+          <Row label="Game navball:" value={fmtNavballDigits(telemetry.navballPitchDeg, telemetry.navballYawDeg, telemetry.navballRollDeg)} valueColor={C.cyan} />
+          {derivedNavball?.digits ? (
+            <>
+              <Row
+                label="Plan navball:"
+                value={`${fmtNavballDigits(derivedNavball.digits.pitchDeg, derivedNavball.digits.yawDeg, derivedNavball.digits.rollDeg)}  [${derivedNavball.note}]`}
+                valueColor={derivedNavball.exact ? C.accel : C.warn}
+              />
+              {actualNavball && (
+                <Row
+                  label="Navball delta:"
+                  value={fmtNavballDelta(actualNavball, derivedNavball.digits)}
+                  valueColor={C.warn}
+                />
+              )}
+            </>
+          ) : (
+            <Row label="Plan navball:" value={derivedNavball?.note ?? "deriving…"} valueColor={C.dim} />
+          )}
+          <Row label="Navball frame:" value={telemetry.navballFrame} />
+          <Row label="Parent body:" value={telemetry.parentBodyId} valueColor={C.dim} />
+          <Row label="Body fwd vec:" value={fmtVec(telemetry.bodyForwardEcl)} valueColor={C.value} />
+          {bodyForwardAngles && <Row label="Body lon/lat:" value={`${bodyForwardAngles.lon.toFixed(1)}° / ${bodyForwardAngles.lat.toFixed(1)}°`} valueColor={C.value} />}
+          {bodyForwardErrorDeg !== null && <Row label="Body +X err:" value={bodyForwardErrorDeg.toFixed(2) + "°"} valueColor={bodyForwardErrorDeg > 5 ? C.warn : C.accel} />}
+          {burnSafety && <Row label="Prograde off:" value={burnSafety.progradeAngleDeg.toFixed(1) + "°"} valueColor={burnSafety.progradeAngleDeg > 120 ? C.error : burnSafety.progradeAngleDeg > 45 ? C.warn : C.accel} />}
+          {burnSafety && <Row label="Radial out:" value={`${burnSafety.radialOutComponent >= 0 ? "+" : ""}${burnSafety.radialOutComponent.toFixed(3)}  (${burnSafety.radialOutAngleDeg.toFixed(1)}°)`} valueColor={burnSafety.radialOutComponent < -0.05 ? C.error : C.value} />}
+          {burnSafety?.warning && <Row label="Burn warning:" value={burnSafety.warning} valueColor={C.error} />}
+          {burnAxisErrorDeg !== null && <Row label="Burn-axis err:" value={`${burnAxisErrorDeg.toFixed(2)}°  [${burnAxisSource}]`} valueColor={burnAxisErrorDeg > 5 ? C.warn : C.accel} />}
+          <Row label="Live thrust:" value={fmtForce(telemetry.activeEngineThrustN)} valueColor={telemetry.activeEngineThrustN > 0 ? C.accel : C.dim} />
+          {telemetry.thrustDirectionEcl ? (
+            <>
+              <Row label="Thrust vec:" value={fmtVec(telemetry.thrustDirectionEcl)} valueColor={C.accel} />
+              {thrustAngles && <Row label="Thrust lon/lat:" value={`${thrustAngles.lon.toFixed(1)}° / ${thrustAngles.lat.toFixed(1)}°`} valueColor={C.accel} />}
+              {thrustErrorDeg !== null && <Row label="Thrust err:" value={thrustErrorDeg.toFixed(2) + "°"} valueColor={thrustErrorDeg > 5 ? C.warn : C.accel} />}
+              {bodyToThrustCantDeg !== null && <Row label="Body->thrust cant:" value={bodyToThrustCantDeg.toFixed(2) + "°"} valueColor={bodyToThrustCantDeg > 1 ? C.warn : C.dim} />}
+              <Row label="Exhaust vec:" value={fmtVec(telemetry.exhaustDirectionEcl!)} valueColor={C.dim} />
+              {exhaustAngles && <Row label="Exhaust lon/lat:" value={`${exhaustAngles.lon.toFixed(1)}° / ${exhaustAngles.lat.toFixed(1)}°`} valueColor={C.dim} />}
+            </>
+          ) : (
+            <Row label="Thrust vec:" value="engines not producing thrust" valueColor={C.dim} />
+          )}
+          {accelerationAngles && accelerationErrorDeg !== null ? (
+            <>
+              <Row label="Accel vec:" value={fmtVec(telemetry.accelerationEcl)} valueColor={C.value} />
+              <Row label="Accel lon/lat:" value={`${accelerationAngles.lon.toFixed(1)}° / ${accelerationAngles.lat.toFixed(1)}°`} valueColor={C.value} />
+              <Row label="Accel err:" value={accelerationErrorDeg.toFixed(2) + "°"} valueColor={accelerationErrorDeg > 5 ? C.warn : C.accel} />
+            </>
+          ) : (
+            <Row label="Accel vec:" value="acceleration below noise floor" valueColor={C.dim} />
+          )}
+        </>
+      ) : (
+        <Row label="Game navball:" value="reading telemetry…" valueColor={C.dim} />
+      )}
+      {fcState && fcAngles ? (
+        <>
+          <Row label="FC mode/frame:" value={`${fcState.attitudeMode} / ${fcState.trackTarget} @ ${fcState.frame}`} />
+          <Row label="FC custom:" value={fmtAttitude(fcAngles)} valueColor={C.cyan} />
+          <Row
+            label="FC delta:"
+            value={
+              `P ${fmtSignedDeg(fcAngles.pitchRad - expected.pitchRad)}  ` +
+              `Y ${fmtSignedDeg(fcAngles.yawRad - expected.yawRad)}  ` +
+              `R ${fmtSignedDeg(fcAngles.rollRad - expected.rollRad)}`
+            }
+            valueColor={C.warn}
+          />
+        </>
+      ) : (
+        <Row label="FC custom:" value="reading state…" valueColor={C.dim} />
+      )}
+    </Section>
+  );
+}
+
 function ScanStatusSection({ scanState }: { scanState: ScanState }) {
   const BAR = 28;
   const filled = Math.round(scanState.progress * BAR);
@@ -758,6 +1176,7 @@ function PreLaunchPanel({
   alignWindow,
   burnPoint,
   scanState,
+  parentBody,
   fcState,
 }: {
   ship: TelemetryData;
@@ -769,6 +1188,7 @@ function PreLaunchPanel({
   alignWindow: AlignmentWindow | null;
   burnPoint: OrbitalBurnPoint | null;
   scanState: ScanState;
+  parentBody: BodyStateData | null;
   fcState: FlightComputerState | null;
 }) {
   return (
@@ -780,7 +1200,7 @@ function PreLaunchPanel({
         <OrbitalBurnSection burnPoint={burnPoint} />
       </box>
       <ScanStatusSection scanState={scanState} />
-      {HOLD_HEADING && <FcSection fcState={fcState} />}
+      <AttitudeDebugSection heading={plan?.burnHeading ?? ship.bodyForwardEcl} headingLabel="Plan" plan={plan} telemetry={ship} parentBody={parentBody} fcState={fcState} />
       <text fg={C.dim} paddingX={1}>
         Switch to BURN phase when ready to commit. Plan is locked on phase entry.
       </text>
@@ -945,6 +1365,7 @@ function App() {
   const [accelIsLive, setAccelIsLive] = useState(false);
   const [earthState, setEarthState] = useState<BodyStateData | null>(null);
   const [marsState, setMarsState] = useState<BodyStateData | null>(null);
+  const [parentBodyState, setParentBodyState] = useState<BodyStateData | null>(null);
   const [alignWindow, setAlignWindowState] = useState<AlignmentWindow | null>(null);
   const [burnPoint, setBurnPoint] = useState<OrbitalBurnPoint | null>(null);
   const [scanState, setScanState] = useState<ScanState>({ running: true, progress: 0, nextRefreshMs: 0 });
@@ -962,6 +1383,14 @@ function App() {
 
   // New: called from UI when user selects a phase tab
   const handlePhaseChange = (newPhase: Phase) => {
+    if (newPhase === "burn" && planRef.current !== null) {
+      const safety = analyzeBurnSafety(planRef.current.burnHeading, telemetry, parentBodyState);
+      if (safety?.warning) {
+        setError(safety.warning + ". Stay in PRE-BURN until the local burn geometry is safe.");
+        return;
+      }
+    }
+
     if (newPhase !== "pre" && planRef.current !== null) {
       lockedPlanRef.current = planRef.current;
       setLockedPlan(planRef.current);
@@ -1068,7 +1497,18 @@ function App() {
         const currentAccel = isLive ? ship.maxAccelMps2 : lastAccelRef.current;
         if (isLive) lastAccelRef.current = currentAccel;
 
+        let navballParentBody: BodyStateData | null = null;
+        if (frameUsesParentState(ship.navballFrame)) {
+          try {
+            navballParentBody = await getBodyState(ship.parentBodyId);
+          } catch {
+            navballParentBody = null;
+          }
+          if (cancelled) return;
+        }
+
         setTelemetry(ship);
+        setParentBodyState(navballParentBody);
         setAccel(currentAccel);
         setAccelIsLive(isLive);
         setError(null);
@@ -1099,8 +1539,11 @@ function App() {
           if (HOLD_HEADING && autoControlRef.current) {
             await setFcHeading(p.burnHeading);
             if (cancelled) return;
-            setFcState(await getFcState());
           }
+
+          const liveFcState = await getFcState();
+          if (cancelled) return;
+          setFcState(liveFcState);
         } else {
           // burn or retro — locked plan drives FC heading, no heavy computation
           const lp = lockedPlanRef.current;
@@ -1108,8 +1551,11 @@ function App() {
             const heading = phaseRef.current === "retro" ? lp.retroHeading : lp.burnHeading;
             await setFcHeading(heading);
             if (cancelled) return;
-            setFcState(await getFcState());
           }
+
+          const liveFcState = await getFcState();
+          if (cancelled) return;
+          setFcState(liveFcState);
         }
       } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
@@ -1150,6 +1596,7 @@ function App() {
               alignWindow={alignWindow}
               burnPoint={burnPoint}
               scanState={scanState}
+              parentBody={parentBodyState}
               fcState={fcState}
             />
           ) : (phase === "burn" || phase === "retro") && lockedPlan && telemetry ? (
@@ -1159,6 +1606,7 @@ function App() {
               postFlip={postFlip}
               accel={accel}
               accelIsLive={accelIsLive}
+              parentBody={parentBodyState}
               fcState={fcState}
             />
           ) : (

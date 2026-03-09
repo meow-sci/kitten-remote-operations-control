@@ -1,4 +1,5 @@
 using System;
+using Brutal.Numerics;
 using GenHTTP.Api.Content;
 using GenHTTP.Modules.Functional;
 using KSA;
@@ -15,6 +16,7 @@ namespace KROC.FeatVehicleData;
 ///   positionEcl         — ecliptic-frame position in metres
 ///   velocityEcl         — ecliptic-frame velocity in m/s
 ///   accelerationBody    — body-frame acceleration vector in m/s² (thrust + gravity)
+///   accelerationEcl     — same measured acceleration transformed into ecliptic coordinates
 ///   accelerationMps2    — scalar magnitude of accelerationBody
 ///   totalMassKg         — total wet mass (kg)
 ///   inertMassKg         — dry/structural mass (kg)
@@ -24,6 +26,16 @@ namespace KROC.FeatVehicleData;
 ///   maxAccelMps2        — max acceleration in m/s² = twrMax × parent-body surface g
 ///                         Use maxAccelMps2 as the planning acceleration for brachistochrone
 ///                         calculations — it remains valid even when engines are cut.
+///   parentBodyId        — current parent/reference body id for local navball frames
+///   navballFrame        — current navball reference frame name
+///   navballPitchDeg     — current game navball pitch display value
+///   navballYawDeg       — current game navball yaw display value
+///   navballRollDeg      — current game navball roll display value
+///   bodyForwardEcl      — vehicle body +X axis in ecliptic coordinates
+///   bodyUpEcl           — vehicle body +Z axis in ecliptic coordinates
+///   activeEngineThrustN — live summed thrust from all currently firing nozzles (newtons)
+///   thrustDirectionEcl  — live net engine thrust direction in ecliptic coordinates, including gimbal deflection
+///   exhaustDirectionEcl — live net exhaust direction in ecliptic coordinates (opposite of thrustDirectionEcl)
 ///
 /// accelerationMps2 is the measured body-frame acceleration magnitude. It drops
 /// to ~0 during refill pauses. Use maxAccelMps2 for planning instead.
@@ -41,9 +53,39 @@ public static class GetVehicleTelemetry
                     if (v is null)
                         return (object)new { status = "error", message = "No active vehicle" };
 
+                    static object Vec3Data(double3 value) => new { x = value.X, y = value.Y, z = value.Z };
+
                     var pos = v.GetPositionEcl();
                     var vel = v.GetVelocityEcl();
                     var acc = v.AccelerationBody;
+                    var body2Ecl = doubleQuat.Concatenate(v.GetBody2Cci(), v.Parent.GetCci2Cce());
+                    var accelerationEcl = acc.Transform(body2Ecl);
+                    var bodyForwardEcl = double3.UnitX.Transform(body2Ecl);
+                    var bodyUpEcl = double3.UnitZ.Transform(body2Ecl);
+                    var thrustForceBody = double3.Zero;
+                    var nozzleStates = v.Parts.RocketNozzles.ModulesAndStates.GetEnumerator();
+                    while (nozzleStates.MoveNext())
+                    {
+                        var nozzle = nozzleStates.Current;
+                        if (nozzle.State.Performance.TotalThrust <= 0f)
+                            continue;
+
+                        thrustForceBody += (double)nozzle.State.Performance.TotalThrust
+                            * double3.Unpack(nozzle.State.ThrustDirectionVehicleAsmb);
+                    }
+
+                    var activeEngineThrustN = thrustForceBody.Length();
+                    object? thrustDirectionEcl = null;
+                    object? exhaustDirectionEcl = null;
+                    if (activeEngineThrustN > 1e-9)
+                    {
+                        var thrustAxisBody = thrustForceBody / activeEngineThrustN;
+                        var thrustAxisEcl = thrustAxisBody.Transform(body2Ecl);
+                        thrustDirectionEcl = Vec3Data(thrustAxisEcl);
+                        exhaustDirectionEcl = Vec3Data(-thrustAxisEcl);
+                    }
+
+                    var navAngles = v.NavBallData.AttitudeAngles;
                     var simTimeSec = Universe.GetElapsedSimTime().Seconds();
 
                     // TWR and max acceleration
@@ -60,9 +102,10 @@ public static class GetVehicleTelemetry
                         data = new
                         {
                             simTimeSec,
-                            positionEcl      = new { x = pos.X, y = pos.Y, z = pos.Z },
-                            velocityEcl      = new { x = vel.X, y = vel.Y, z = vel.Z },
-                            accelerationBody = new { x = acc.X, y = acc.Y, z = acc.Z },
+                            positionEcl      = Vec3Data(pos),
+                            velocityEcl      = Vec3Data(vel),
+                            accelerationBody = Vec3Data(acc),
+                            accelerationEcl  = Vec3Data(accelerationEcl),
                             accelerationMps2 = acc.Length(),
                             totalMassKg      = (double)v.TotalMass,
                             inertMassKg      = (double)v.InertMass,
@@ -70,6 +113,16 @@ public static class GetVehicleTelemetry
                             twrCurrent       = v.NavBallData.ThrustWeightRatio,
                             twrMax,
                             maxAccelMps2,
+                            parentBodyId     = v.Parent.Id,
+                            activeEngineThrustN,
+                            thrustDirectionEcl,
+                            exhaustDirectionEcl,
+                            navballFrame     = v.NavBallData.Frame.ToString(),
+                            navballPitchDeg  = navAngles.Y,
+                            navballYawDeg    = navAngles.Z,
+                            navballRollDeg   = navAngles.X,
+                            bodyForwardEcl   = Vec3Data(bodyForwardEcl),
+                            bodyUpEcl        = Vec3Data(bodyUpEcl),
                         }
                     };
                 }
