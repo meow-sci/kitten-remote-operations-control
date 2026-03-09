@@ -3,32 +3,34 @@
  *
  * Brachistochrone (continuous-burn) transfer planner with an OpenTUI React interface.
  *
- * The algorithm iteratively solves for the intercept point by predicting where the
- * target will be at the estimated arrival time, then recomputing the trip time from
- * that new distance. Converges in ~5 iterations.
+ * Three manually-controlled phases (select with Left/Right + Enter):
+ *   PRE-BURN  — Live recalculates the transfer every poll tick. Shows alignment window,
+ *               orbital burn point, and live plan preview. Switch to BURN when ready.
+ *   BURN      — Plan is locked on entry (using current game sim-time as departure T0).
+ *               Flight computer is continuously commanded to hold BURN HEADING.
+ *               Switch to RETRO as you approach the flip point.
+ *   RETRO     — Same locked plan. FC commanded to hold RETRO HEADING (negated burn).
+ *               Switch back to PRE-BURN to re-plan if needed.
  *
- * PRE-LAUNCH phase shows:
- *   - Optimal alignment window countdown + trip time at that window
- *   - Orbital burn point: best moment in current orbit to start the burn
- *
- * Once sustained acceleration is detected (2 consecutive polls > 0.05 m/s²),
- * switches automatically to BURN phase.
+ * Timing is game-universe-sim-time based — works correctly at any time compression.
+ * Acceleration is derived from vehicle maxAccelMps2 (TWR × g) each telemetry poll.
  *
  * Usage:
- *   bun src/brachistochrone-watch.tsx [targetBodyId] [--hold]
+ *   bun src/brachistochrone-watch.tsx [targetBodyId] [vehicleId] [--hold]
  *
  * Examples:
  *   bun src/brachistochrone-watch.tsx mars
- *   bun src/brachistochrone-watch.tsx mars --hold   # auto-hold heading via FC
+ *   bun src/brachistochrone-watch.tsx mars vehicle-123          # enables continuous refill
+ *   bun src/brachistochrone-watch.tsx mars vehicle-123 --hold   # refill + auto-hold heading via FC
  *
- * ACCELERATING (pre-flip)  → point ship at shown BURN HEADING, fire engines
- * DECELERATING (post-flip) → point ship at shown RETRO HEADING, fire engines
- * Flip when the countdown reaches zero.
- *
- * --hold / HOLD_HEADING=1: auto-pushes heading to KSA flight computer (EclBody frame).
+ * Keys:
+ *   Left / Right — navigate phase selector
+ *   Enter        — commit phase selection (locks plan when entering BURN or RETRO)
+ *   F            — toggle AUTO on/off (refill + FC heading push)
+ *   ESC          — quit
  */
 
-import { createCliRenderer } from "@opentui/core";
+import { createCliRenderer, type TabSelectOption } from "@opentui/core";
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from "@opentui/react";
 import { useState, useEffect, useRef } from "react";
 
@@ -36,14 +38,16 @@ import { useState, useEffect, useRef } from "react";
 
 const BASE_URL = process.env.KROC_URL ?? "http://localhost:7887";
 const TARGET_ID = Bun.argv[2] ?? "mars";
+const VEHICLE_ID = Bun.argv[3] ?? null;  // optional — enables continuous refill loop
 const HOLD_HEADING = Bun.argv.includes("--hold") || process.env.HOLD_HEADING === "1";
 const POLL_MS = 250;
+const REFILL_MS = 100;
 const MAX_ITERS = 12;
 const CONVERGE_EPS = 0.0001; // 0.01% trip-time change → converged
 const EARTH_ID = "earth";
 
-const SCAN_STEP_SEC    = 259200;    // 3 days   — coarse scan step
-const SCAN_WINDOW_SEC  = 67392000;  // ~780 days — one synodic period
+const SCAN_STEP_SEC = 259200;    // 3 days   — coarse scan step
+const SCAN_WINDOW_SEC = 67392000;  // ~780 days — one synodic period
 const REFRESH_STEP_SEC = 21600;     // 6 hours  — fine refresh step
 const REFRESH_WINDOW_SEC = 2592000; // 30 days  — refresh window
 const ALIGN_REFRESH_MS = 60000;     // re-scan every 60 s
@@ -51,23 +55,23 @@ const ALIGN_REFRESH_MS = 60000;     // re-scan every 60 s
 // ── Color palette ─────────────────────────────────────────────────────────────
 
 const C = {
-  bg:        "#0d1117",
-  headerBg:  "#161b22",
-  border:    "#30363d",
-  label:     "#8b949e",
-  value:     "#e6edf3",
-  accel:     "#3fb950", // green  — accelerating
-  decel:     "#f78166", // orange — decelerating
-  cyan:      "#58a6ff", // blue   — pre-launch / FC
-  dim:       "#484f58",
-  warn:      "#d29922",
-  error:     "#f85149",
-  title:     "#e6edf3",
+  bg: "#0d1117",
+  headerBg: "#161b22",
+  border: "#30363d",
+  label: "#8b949e",
+  value: "#e6edf3",
+  accel: "#3fb950", // green  — accelerating
+  decel: "#f78166", // orange — decelerating
+  cyan: "#58a6ff", // blue   — pre-launch / FC
+  dim: "#484f58",
+  warn: "#d29922",
+  error: "#f85149",
+  title: "#e6edf3",
 };
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-type Phase = "pre" | "burn";
+type Phase = "pre" | "burn" | "retro";
 
 interface Vec3 { x: number; y: number; z: number; }
 
@@ -132,17 +136,17 @@ interface BrachistochronePlan {
 }
 
 interface OrbitalBurnPoint {
-  orbitRadiusM:    number;
-  orbitSpeedMps:   number;
-  orbitPeriodSec:  number;
-  burnHeading:     Vec3;
+  orbitRadiusM: number;
+  orbitSpeedMps: number;
+  orbitPeriodSec: number;
+  burnHeading: Vec3;
   currentAngleDeg: number;
-  timeToPointSec:  number;
+  timeToPointSec: number;
 }
 
 interface ScanState {
-  running:       boolean;
-  progress:      number;  // 0..1
+  running: boolean;
+  progress: number;  // 0..1
   nextRefreshMs: number;  // wall-clock ms of next scheduled refresh
 }
 
@@ -206,12 +210,20 @@ async function predictBody(id: string, simTimeSec: number): Promise<BodyPredictD
 
 async function setFcHeading(heading: Vec3): Promise<void> {
   const u = norm(heading);
-  const yaw   = Math.atan2(u.y, u.x);
+  const yaw = Math.atan2(u.y, u.x);
   const pitch = Math.asin(Math.max(-1, Math.min(1, u.z)));
   await fetch(`${BASE_URL}/flight-computer/attitude`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ roll: 0, yaw, pitch, frame: "EclBody" }),
+  });
+}
+
+async function refillVehicle(vehicleId: string): Promise<void> {
+  await fetch(`${BASE_URL}/vehicle/actions/refill`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ vehicleId }),
   });
 }
 
@@ -242,36 +254,36 @@ async function computePlan(
   overridePos?: Vec3,
   overrideT0?: number,
 ): Promise<BrachistochronePlan> {
-  const t0      = overrideT0 ?? ship.simTimeSec;
+  const t0 = overrideT0 ?? ship.simTimeSec;
   const shipPos = overridePos ?? ship.positionEcl;
 
   const targetNow = await predictBody(TARGET_ID, t0);
-  let tripTime    = 2 * Math.sqrt(len(sub(targetNow.positionEcl, shipPos)) / accel);
+  let tripTime = 2 * Math.sqrt(len(sub(targetNow.positionEcl, shipPos)) / accel);
   let interceptPos = targetNow.positionEcl;
   let interceptVel = targetNow.velocityEcl;
   let iters = 0;
 
   for (iters = 1; iters <= MAX_ITERS; iters++) {
     const target = await predictBody(TARGET_ID, t0 + tripTime);
-    interceptPos  = target.positionEcl;
-    interceptVel  = target.velocityEcl;
-    const d       = len(sub(interceptPos, shipPos));
+    interceptPos = target.positionEcl;
+    interceptVel = target.velocityEcl;
+    const d = len(sub(interceptPos, shipPos));
     const newTrip = 2 * Math.sqrt(d / accel);
-    const delta   = Math.abs(newTrip - tripTime) / newTrip;
+    const delta = Math.abs(newTrip - tripTime) / newTrip;
     tripTime = newTrip;
     if (delta < CONVERGE_EPS) break;
   }
 
   const heading = norm(sub(interceptPos, shipPos));
   return {
-    tripTimeSec:       tripTime,
-    flipTimeSec:       t0 + tripTime / 2,
+    tripTimeSec: tripTime,
+    flipTimeSec: t0 + tripTime / 2,
     arrivalSimTimeSec: t0 + tripTime,
     interceptPos,
     interceptVel,
-    burnHeading:  heading,
+    burnHeading: heading,
     retroHeading: { x: -heading.x, y: -heading.y, z: -heading.z },
-    iterations:   iters,
+    iterations: iters,
   };
 }
 
@@ -281,7 +293,7 @@ async function fastBrachiEstimate(
   accel: number,
   targetT0Pos: Vec3,
 ): Promise<number> {
-  const tSeed        = 2 * Math.sqrt(len(sub(targetT0Pos, earthPos)) / accel);
+  const tSeed = 2 * Math.sqrt(len(sub(targetT0Pos, earthPos)) / accel);
   const targetArrival = await predictBody(TARGET_ID, tDep + tSeed);
   return 2 * Math.sqrt(len(sub(targetArrival.positionEcl, earthPos)) / accel);
 }
@@ -297,22 +309,22 @@ async function scanAlignmentWindows(
   coarse: boolean,
   progressCb: (frac: number) => void,
 ): Promise<AlignmentWindow> {
-  const step   = coarse ? SCAN_STEP_SEC    : REFRESH_STEP_SEC;
-  const window = coarse ? SCAN_WINDOW_SEC  : REFRESH_WINDOW_SEC;
-  const steps  = Math.ceil(window / step);
+  const step = coarse ? SCAN_STEP_SEC : REFRESH_STEP_SEC;
+  const window = coarse ? SCAN_WINDOW_SEC : REFRESH_WINDOW_SEC;
+  const steps = Math.ceil(window / step);
 
   const [targetT0] = await Promise.all([
     predictBody(TARGET_ID, t0),
-    predictBody(EARTH_ID,  t0), // warm-up
+    predictBody(EARTH_ID, t0), // warm-up
   ]);
   const targetT0Pos = targetT0.positionEcl;
 
   let bestDep = t0, bestTrip = Infinity;
 
   for (let i = 0; i < steps; i++) {
-    const tDep       = t0 + i * step;
+    const tDep = t0 + i * step;
     const earthAtDep = await predictBody(EARTH_ID, tDep);
-    const tripTime   = await fastBrachiEstimate(earthAtDep.positionEcl, tDep, accel, targetT0Pos);
+    const tripTime = await fastBrachiEstimate(earthAtDep.positionEcl, tDep, accel, targetT0Pos);
     if (tripTime < bestTrip) { bestTrip = tripTime; bestDep = tDep; }
     progressCb((i + 1) / steps);
   }
@@ -328,29 +340,29 @@ async function computeOrbitalBurnPoint(
 ): Promise<OrbitalBurnPoint> {
   const velRel = sub(ship.velocityEcl, earth.velocityEcl);
   const posRel = sub(ship.positionEcl, earth.positionEcl);
-  const r      = len(posRel);
-  const vOrb   = len(velRel);
+  const r = len(posRel);
+  const vOrb = len(velRel);
   const period = (2 * Math.PI * r) / vOrb;
 
   const earthAtWindow = await predictBody(EARTH_ID, alignWindow.depSimTimeSec);
-  const windowPlan    = await computePlan(ship, accel, earthAtWindow.positionEcl, alignWindow.depSimTimeSec);
-  const burnHeading   = windowPlan.burnHeading;
+  const windowPlan = await computePlan(ship, accel, earthAtWindow.positionEcl, alignWindow.depSimTimeSec);
+  const burnHeading = windowPlan.burnHeading;
 
-  const velDir   = norm(velRel);
-  const cosA     = Math.max(-1, Math.min(1, dot(velDir, burnHeading)));
+  const velDir = norm(velRel);
+  const cosA = Math.max(-1, Math.min(1, dot(velDir, burnHeading)));
   const angleDeg = Math.acos(cosA) * 180 / Math.PI;
   const angleRad = angleDeg * Math.PI / 180;
 
-  const t1 = (angleRad               / (2 * Math.PI)) * period;
+  const t1 = (angleRad / (2 * Math.PI)) * period;
   const t2 = ((2 * Math.PI - angleRad) / (2 * Math.PI)) * period;
 
   return {
-    orbitRadiusM:    r,
-    orbitSpeedMps:   vOrb,
-    orbitPeriodSec:  period,
+    orbitRadiusM: r,
+    orbitSpeedMps: vOrb,
+    orbitPeriodSec: period,
     burnHeading,
     currentAngleDeg: angleDeg,
-    timeToPointSec:  Math.min(t1, t2),
+    timeToPointSec: Math.min(t1, t2),
   };
 }
 
@@ -358,13 +370,13 @@ async function computeOrbitalBurnPoint(
 
 function fmtDur(seconds: number): string {
   const neg = seconds < 0;
-  const s   = Math.abs(seconds);
-  const d   = Math.floor(s / 86400);
-  const h   = Math.floor((s % 86400) / 3600);
-  const m   = Math.floor((s % 3600) / 60);
+  const s = Math.abs(seconds);
+  const d = Math.floor(s / 86400);
+  const h = Math.floor((s % 86400) / 3600);
+  const m = Math.floor((s % 3600) / 60);
   const sec = Math.floor(s % 60);
   const parts: string[] = [];
-  if (d > 0)      parts.push(`${d}d`);
+  if (d > 0) parts.push(`${d}d`);
   if (h > 0 || d > 0) parts.push(`${h}h`);
   parts.push(`${String(m).padStart(2, "0")}m`);
   parts.push(`${String(sec).padStart(2, "0")}s`);
@@ -373,9 +385,9 @@ function fmtDur(seconds: number): string {
 
 function fmtNum(n: number, decimals = 2): string {
   if (Math.abs(n) >= 1e12) return (n / 1e12).toFixed(1) + " Tm";
-  if (Math.abs(n) >= 1e9)  return (n / 1e9).toFixed(1)  + " Gm";
-  if (Math.abs(n) >= 1e6)  return (n / 1e6).toFixed(1)  + " Mm";
-  if (Math.abs(n) >= 1e3)  return (n / 1e3).toFixed(1)  + " km";
+  if (Math.abs(n) >= 1e9) return (n / 1e9).toFixed(1) + " Gm";
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1) + " Mm";
+  if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1) + " km";
   return n.toFixed(decimals) + " m";
 }
 
@@ -430,12 +442,20 @@ function Section({
   );
 }
 
+// ── Phase selector ────────────────────────────────────────────────────────────
+
+const PHASE_OPTIONS: TabSelectOption[] = [
+  { name: "PRE-BURN", description: "Planning — live recalculation", value: "pre" as Phase },
+  { name: "BURN", description: "Accelerating — plan locked on entry", value: "burn" as Phase },
+  { name: "RETRO", description: "Decelerating — flip completed", value: "retro" as Phase },
+];
+
 // ── BURN PHASE components ─────────────────────────────────────────────────────
 
 function BurnCommandSection({ heading, postFlip }: { heading: Vec3; postFlip: boolean }) {
   const { lon, lat } = eclipticAngles(heading);
   const accent = postFlip ? C.decel : C.accel;
-  const label  = postFlip ? "RETRO HEADING" : "BURN HEADING";
+  const label = postFlip ? "RETRO HEADING" : "BURN HEADING";
   return (
     <Section title={label} accentColor={accent}>
       <text fg={accent}><strong>{fmtVec(heading)}</strong></text>
@@ -453,18 +473,15 @@ function BurnCommandSection({ heading, postFlip }: { heading: Vec3; postFlip: bo
 function TimingSection({
   ship,
   plan,
-  flipTimeSec,
   postFlip,
 }: {
   ship: TelemetryData;
   plan: BrachistochronePlan;
-  flipTimeSec: number | null;
   postFlip: boolean;
 }) {
-  const now           = ship.simTimeSec;
-  const effectiveFlip = flipTimeSec ?? plan.flipTimeSec;
-  const timeToFlip    = effectiveFlip - now;
-  const remaining     = plan.arrivalSimTimeSec - now;
+  const now = ship.simTimeSec;
+  const timeToFlip = plan.flipTimeSec - now;
+  const remaining = plan.arrivalSimTimeSec - now;
   return (
     <Section title="TIMING">
       {!postFlip ? (
@@ -483,7 +500,7 @@ function TimingSection({
 }
 
 function InterceptSection({ ship, plan }: { ship: TelemetryData; plan: BrachistochronePlan }) {
-  const dist   = len(sub(plan.interceptPos, ship.positionEcl));
+  const dist = len(sub(plan.interceptPos, ship.positionEcl));
   const relVel = len(sub(ship.velocityEcl, plan.interceptVel));
   return (
     <Section title="INTERCEPT">
@@ -543,10 +560,25 @@ function FcSection({ fcState }: { fcState: FlightComputerState | null }) {
   );
 }
 
+function LockedPlanSection({ plan }: { plan: BrachistochronePlan }) {
+  const { lon, lat } = eclipticAngles(plan.burnHeading);
+  return (
+    <Section title="LOCKED PLAN" accentColor={C.warn}>
+      <Row label="Trip time:" value={fmtDur(plan.tripTimeSec)} />
+      <Row
+        label="Burn heading:"
+        value={`lon ${lon.toFixed(1)}°  lat ${lat.toFixed(1)}°`}
+        valueColor={C.accel}
+      />
+      <Row label="Flip sim-T:" value={plan.flipTimeSec.toFixed(0) + " s"} />
+      <Row label="Arrive sim-T:" value={plan.arrivalSimTimeSec.toFixed(0) + " s"} />
+    </Section>
+  );
+}
+
 function BurnPanel({
   ship,
   plan,
-  flipTimeSec,
   postFlip,
   accel,
   accelIsLive,
@@ -554,7 +586,6 @@ function BurnPanel({
 }: {
   ship: TelemetryData;
   plan: BrachistochronePlan;
-  flipTimeSec: number | null;
   postFlip: boolean;
   accel: number;
   accelIsLive: boolean;
@@ -565,10 +596,11 @@ function BurnPanel({
     <box flexDirection="row" flexGrow={1} gap={1} padding={1}>
       <box flexDirection="column" flexGrow={1} gap={1}>
         <BurnCommandSection heading={activeHeading} postFlip={postFlip} />
-        <TimingSection ship={ship} plan={plan} flipTimeSec={flipTimeSec} postFlip={postFlip} />
+        <TimingSection ship={ship} plan={plan} postFlip={postFlip} />
         <InterceptSection ship={ship} plan={plan} />
       </box>
       <box flexDirection="column" flexGrow={1} gap={1}>
+        <LockedPlanSection plan={plan} />
         <ShipStateSection ship={ship} plan={plan} accel={accel} accelIsLive={accelIsLive} />
         {HOLD_HEADING && <FcSection fcState={fcState} />}
       </box>
@@ -577,6 +609,40 @@ function BurnPanel({
 }
 
 // ── PRE-LAUNCH components ─────────────────────────────────────────────────────
+
+/** Shows the live (pre-burn) brachistochrone calculation so you know what will be locked in. */
+function LivePlanSection({ plan, accel, accelIsLive }: {
+  plan: BrachistochronePlan | null;
+  accel: number;
+  accelIsLive: boolean;
+}) {
+  if (!plan) {
+    return (
+      <Section title="LIVE TRANSFER PLAN" accentColor={C.cyan} flexGrow={1}>
+        <text fg={C.dim}>computing…</text>
+      </Section>
+    );
+  }
+  const { lon, lat } = eclipticAngles(plan.burnHeading);
+  return (
+    <Section title="LIVE TRANSFER PLAN" accentColor={C.cyan} flexGrow={1}>
+      <Row label="Trip time:" value={fmtDur(plan.tripTimeSec)} />
+      <Row
+        label="Burn heading:"
+        value={`lon ${lon.toFixed(1)}°  lat ${lat.toFixed(1)}°`}
+        valueColor={C.accel}
+      />
+      <Row label="Flip sim-T:" value={plan.flipTimeSec.toFixed(0) + " s"} />
+      <Row label="Arrive sim-T:" value={plan.arrivalSimTimeSec.toFixed(0) + " s"} />
+      <Row
+        label="Max accel:"
+        value={accel.toFixed(3) + " m/s²" + (accelIsLive ? "" : " (fb)")}
+        valueColor={accelIsLive ? C.value : C.warn}
+      />
+      <Row label="Conv iters:" value={String(plan.iterations)} valueColor={C.dim} />
+    </Section>
+  );
+}
 
 function AlignmentWindowSection({
   ship,
@@ -589,8 +655,8 @@ function AlignmentWindowSection({
   mars: BodyStateData;
   alignWindow: AlignmentWindow | null;
 }) {
-  const now           = ship.simTimeSec;
-  const sepDeg        = Math.abs(angularSepDeg(earth.positionEcl, mars.positionEcl));
+  const now = ship.simTimeSec;
+  const sepDeg = Math.abs(angularSepDeg(earth.positionEcl, mars.positionEcl));
   const earthMarsDist = len(sub(mars.positionEcl, earth.positionEcl));
   return (
     <Section title="ALIGNMENT WINDOW" accentColor={C.cyan} flexGrow={1}>
@@ -644,10 +710,10 @@ function OrbitalBurnSection({ burnPoint }: { burnPoint: OrbitalBurnPoint | null 
 }
 
 function ScanStatusSection({ scanState }: { scanState: ScanState }) {
-  const BAR    = 28;
+  const BAR = 28;
   const filled = Math.round(scanState.progress * BAR);
-  const bar    = "█".repeat(filled) + "░".repeat(BAR - filled);
-  const pct    = Math.round(scanState.progress * 100);
+  const bar = "█".repeat(filled) + "░".repeat(BAR - filled);
+  const pct = Math.round(scanState.progress * 100);
   const secsUntil = Math.max(0, Math.round((scanState.nextRefreshMs - Date.now()) / 1000));
   return (
     <box
@@ -686,26 +752,37 @@ function PreLaunchPanel({
   ship,
   earth,
   mars,
+  plan,
+  accel,
+  accelIsLive,
   alignWindow,
   burnPoint,
   scanState,
+  fcState,
 }: {
   ship: TelemetryData;
   earth: BodyStateData;
   mars: BodyStateData;
+  plan: BrachistochronePlan | null;
+  accel: number;
+  accelIsLive: boolean;
   alignWindow: AlignmentWindow | null;
   burnPoint: OrbitalBurnPoint | null;
   scanState: ScanState;
+  fcState: FlightComputerState | null;
 }) {
   return (
     <box flexDirection="column" flexGrow={1} gap={1} padding={1}>
+      {/* Top row: live plan + alignment window + orbital burn */}
       <box flexDirection="row" gap={1} flexGrow={1}>
+        <LivePlanSection plan={plan} accel={accel} accelIsLive={accelIsLive} />
         <AlignmentWindowSection ship={ship} earth={earth} mars={mars} alignWindow={alignWindow} />
         <OrbitalBurnSection burnPoint={burnPoint} />
       </box>
       <ScanStatusSection scanState={scanState} />
+      {HOLD_HEADING && <FcSection fcState={fcState} />}
       <text fg={C.dim} paddingX={1}>
-        Wait for the alignment window, then fire at the orbital burn point.
+        Switch to BURN phase when ready to commit. Plan is locked on phase entry.
       </text>
     </box>
   );
@@ -714,24 +791,12 @@ function PreLaunchPanel({
 // ── Chrome ────────────────────────────────────────────────────────────────────
 
 function HeaderBar({
-  phase,
-  postFlip,
   accel,
   accelIsLive,
 }: {
-  phase: Phase;
-  postFlip: boolean;
   accel: number;
   accelIsLive: boolean;
 }) {
-  const phaseLabel =
-    phase === "pre" ? "PRE-LAUNCH" :
-    postFlip        ? "DECELERATING ← POST-FLIP" :
-                      "ACCELERATING → PRE-FLIP";
-  const phaseColor =
-    phase === "pre" ? C.cyan  :
-    postFlip        ? C.decel :
-                      C.accel;
   return (
     <box
       backgroundColor={C.headerBg}
@@ -746,8 +811,9 @@ function HeaderBar({
         {"  ›  TARGET: "}
         <span fg={C.cyan}>{TARGET_ID.toUpperCase()}</span>
       </text>
-      <text fg={phaseColor}><strong>{phaseLabel}</strong></text>
       <text fg={accelIsLive ? C.accel : C.warn}>
+        <strong>MAX ACCEL</strong>
+        {"  "}
         {accel.toFixed(3)} m/s²
         {accelIsLive ? "" : " (fallback)"}
       </text>
@@ -755,13 +821,50 @@ function HeaderBar({
   );
 }
 
+function PhaseSelector({
+  phase,
+  onPhaseChange,
+}: {
+  phase: Phase;
+  onPhaseChange: (p: Phase) => void;
+}) {
+  // const selectedIndex: number = phase === "pre" ? 0 : phase === "burn" ? 1 : 2;
+  const accentColor =
+    phase === "pre" ? C.cyan :
+      phase === "burn" ? C.accel :
+        C.decel;
+  return (
+    <box backgroundColor={C.headerBg} paddingX={2} paddingY={0}>
+      <tab-select
+        options={PHASE_OPTIONS}
+        // selectedIndex={selectedIndex}
+        tabWidth={30}
+        focused
+        // onSelect={(_index: number, option: { name: string; value?: Phase }) => {
+        onSelect={(i, option) => {
+          if (option?.value !== undefined) onPhaseChange(option.value);
+        }}
+        selectedBackgroundColor={accentColor}
+        selectedTextColor="#ffffff"
+        backgroundColor={C.headerBg}
+        textColor={C.dim}
+        focusedBackgroundColor={C.headerBg}
+        focusedTextColor={C.label}
+      />
+    </box>
+  );
+}
+
 function FooterBar({
   telemetry,
   error,
+  autoControl,
 }: {
   telemetry: TelemetryData | null;
   error: string | null;
+  autoControl: boolean;
 }) {
+  const hasAutoFeatures = HOLD_HEADING || !!VEHICLE_ID;
   return (
     <box
       backgroundColor={C.headerBg}
@@ -783,16 +886,24 @@ function FooterBar({
       ) : (
         <text fg={C.dim}>Connecting to KROC…</text>
       )}
+      {hasAutoFeatures && (
+        <text>
+          <span fg={C.dim}>[F] AUTO </span>
+          <span fg={autoControl ? C.accel : C.warn}>
+            <strong>{autoControl ? "ON" : "OFF"}</strong>
+          </span>
+        </text>
+      )}
       <text fg={C.dim}>ESC to quit</text>
     </box>
   );
 }
 
 function StartupScreen({ scanState }: { scanState: ScanState }) {
-  const BAR    = 36;
+  const BAR = 36;
   const filled = Math.round(scanState.progress * BAR);
-  const bar    = "█".repeat(filled) + "░".repeat(BAR - filled);
-  const pct    = Math.round(scanState.progress * 100);
+  const bar = "█".repeat(filled) + "░".repeat(BAR - filled);
+  const pct = Math.round(scanState.progress * 100);
   return (
     <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center" gap={2}>
       <text fg={C.cyan}>
@@ -813,31 +924,34 @@ function StartupScreen({ scanState }: { scanState: ScanState }) {
 // ── Root app ──────────────────────────────────────────────────────────────────
 
 function App() {
-  const renderer  = useRenderer();
+  const renderer = useRenderer();
   const { width, height } = useTerminalDimensions();
 
   // Refs: mutable state read/written across async poll iterations without
   // triggering re-renders, but always reflect the latest value when React renders.
-  const flipTimeRef       = useRef<number | null>(null);
-  const lastAccelRef      = useRef(5.0);
-  const accelHighCountRef = useRef(0);
-  const phaseRef          = useRef<Phase>("pre");
-  const alignWindowRef    = useRef<AlignmentWindow | null>(null);
+  const lastAccelRef = useRef(5.0);
+  const phaseRef = useRef<Phase>("pre");
+  const alignWindowRef = useRef<AlignmentWindow | null>(null);
+  const autoControlRef = useRef(false);
+  const planRef = useRef<BrachistochronePlan | null>(null);
+  const lockedPlanRef = useRef<BrachistochronePlan | null>(null);
 
   // Display state
-  const [phase, setPhaseState]           = useState<Phase>("pre");
-  const [telemetry, setTelemetry]        = useState<TelemetryData | null>(null);
-  const [plan, setPlan]                  = useState<BrachistochronePlan | null>(null);
-  const [accel, setAccel]                = useState(5.0);
-  const [accelIsLive, setAccelIsLive]    = useState(false);
-  const [earthState, setEarthState]      = useState<BodyStateData | null>(null);
-  const [marsState, setMarsState]        = useState<BodyStateData | null>(null);
+  const [phase, setPhaseState] = useState<Phase>("pre");
+  const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
+  const [plan, setPlan] = useState<BrachistochronePlan | null>(null);
+  const [lockedPlan, setLockedPlan] = useState<BrachistochronePlan | null>(null);
+  const [accel, setAccel] = useState(5.0);
+  const [accelIsLive, setAccelIsLive] = useState(false);
+  const [earthState, setEarthState] = useState<BodyStateData | null>(null);
+  const [marsState, setMarsState] = useState<BodyStateData | null>(null);
   const [alignWindow, setAlignWindowState] = useState<AlignmentWindow | null>(null);
-  const [burnPoint, setBurnPoint]        = useState<OrbitalBurnPoint | null>(null);
-  const [scanState, setScanState]        = useState<ScanState>({ running: true, progress: 0, nextRefreshMs: 0 });
-  const [fcState, setFcState]            = useState<FlightComputerState | null>(null);
-  const [error, setError]                = useState<string | null>(null);
-  const [startupDone, setStartupDone]    = useState(false);
+  const [burnPoint, setBurnPoint] = useState<OrbitalBurnPoint | null>(null);
+  const [scanState, setScanState] = useState<ScanState>({ running: true, progress: 0, nextRefreshMs: 0 });
+  const [fcState, setFcState] = useState<FlightComputerState | null>(null);
+  const [autoControl, setAutoControl] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [startupDone, setStartupDone] = useState(false);
 
   // Helpers that keep ref + state in sync
   const setPhase = (p: Phase) => { phaseRef.current = p; setPhaseState(p); };
@@ -846,10 +960,35 @@ function App() {
     setAlignWindowState(w);
   };
 
-  // ESC to quit
+  // New: called from UI when user selects a phase tab
+  const handlePhaseChange = (newPhase: Phase) => {
+    if (newPhase !== "pre" && planRef.current !== null) {
+      lockedPlanRef.current = planRef.current;
+      setLockedPlan(planRef.current);
+    }
+    phaseRef.current = newPhase;
+    setPhaseState(newPhase);
+  };
+
+  // ESC to quit / F to toggle auto-control
   useKeyboard((key) => {
     if (key.name === "escape") renderer.destroy();
+    if (key.name === "f") {
+      const next = !autoControlRef.current;
+      autoControlRef.current = next;
+      setAutoControl(next);
+    }
   });
+
+  // ── Continuous refill loop ─────────────────────────────────────────────────
+  useEffect(() => {
+    if (!VEHICLE_ID) return;
+    let cancelled = false;
+    const intervalId = setInterval(() => {
+      if (!cancelled && autoControlRef.current) refillVehicle(VEHICLE_ID).catch(() => { /* non-fatal */ });
+    }, REFILL_MS);
+    return () => { cancelled = true; clearInterval(intervalId); };
+  }, []);
 
   // ── Startup coarse scan ────────────────────────────────────────────────────
   useEffect(() => {
@@ -858,7 +997,7 @@ function App() {
       try {
         const seedShip = await getTelemetry();
         if (cancelled) return;
-        const t0     = seedShip.simTimeSec;
+        const t0 = seedShip.simTimeSec;
         const accel0 = seedShip.maxAccelMps2 > 0.001 ? seedShip.maxAccelMps2 : 5.0;
         lastAccelRef.current = accel0;
 
@@ -922,10 +1061,10 @@ function App() {
     const run = async () => {
       if (cancelled) return;
       try {
-        const ship   = await getTelemetry();
+        const ship = await getTelemetry();
         if (cancelled) return;
 
-        const isLive       = ship.maxAccelMps2 > 0.001;
+        const isLive = ship.maxAccelMps2 > 0.001;
         const currentAccel = isLive ? ship.maxAccelMps2 : lastAccelRef.current;
         if (isLive) lastAccelRef.current = currentAccel;
 
@@ -934,46 +1073,42 @@ function App() {
         setAccelIsLive(isLive);
         setError(null);
 
-        // Phase transition: 2 consecutive high-accel polls → BURN
+        // In pre phase: live compute brachistochrone + fetch earth/target for alignment
+        // In burn/retro phase: use locked plan, just push FC heading
         if (phaseRef.current === "pre") {
-          if (ship.accelerationMps2 > 0.05) {
-            accelHighCountRef.current++;
-            if (accelHighCountRef.current >= 2) setPhase("burn");
-          } else {
-            accelHighCountRef.current = 0;
-          }
-        }
-
-        if (phaseRef.current === "burn") {
           const p = await computePlan(ship, currentAccel);
           if (cancelled) return;
-
-          // Preserve the flip time — once we're past it, don't reset it
-          if (flipTimeRef.current === null || p.flipTimeSec > ship.simTimeSec) {
-            flipTimeRef.current = p.flipTimeSec;
-          }
+          planRef.current = p;
           setPlan(p);
 
-          if (HOLD_HEADING) {
-            const postFlipLocal = (flipTimeRef.current ?? p.flipTimeSec) < ship.simTimeSec;
-            await setFcHeading(postFlipLocal ? p.retroHeading : p.burnHeading);
-            if (cancelled) return;
-            setFcState(await getFcState());
-          }
-        } else {
-          const [earth, mars] = await Promise.all([
+          const [earth, target] = await Promise.all([
             getBodyState(EARTH_ID),
             getBodyState(TARGET_ID),
           ]);
           if (cancelled) return;
           setEarthState(earth);
-          setMarsState(mars);
+          setMarsState(target);
 
           if (alignWindowRef.current !== null) {
             try {
               const bp = await computeOrbitalBurnPoint(ship, earth, alignWindowRef.current, currentAccel);
               if (!cancelled) setBurnPoint(bp);
             } catch { /* non-fatal */ }
+          }
+
+          if (HOLD_HEADING && autoControlRef.current) {
+            await setFcHeading(p.burnHeading);
+            if (cancelled) return;
+            setFcState(await getFcState());
+          }
+        } else {
+          // burn or retro — locked plan drives FC heading, no heavy computation
+          const lp = lockedPlanRef.current;
+          if (lp !== null && HOLD_HEADING && autoControlRef.current) {
+            const heading = phaseRef.current === "retro" ? lp.retroHeading : lp.burnHeading;
+            await setFcHeading(heading);
+            if (cancelled) return;
+            setFcState(await getFcState());
           }
         }
       } catch (err: unknown) {
@@ -987,10 +1122,7 @@ function App() {
   }, [startupDone]);
 
   // Derived: is the flip already in the past?
-  const postFlip =
-    flipTimeRef.current !== null && telemetry !== null
-      ? flipTimeRef.current < telemetry.simTimeSec
-      : false;
+  const postFlip = phase === "retro";
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -1004,34 +1136,40 @@ function App() {
         <StartupScreen scanState={scanState} />
       ) : (
         <>
-          <HeaderBar phase={phase} postFlip={postFlip} accel={accel} accelIsLive={accelIsLive} />
+          <HeaderBar accel={accel} accelIsLive={accelIsLive} />
+          <PhaseSelector phase={phase} onPhaseChange={handlePhaseChange} />
 
-          {phase === "burn" && plan && telemetry ? (
+          {phase === "pre" && telemetry && earthState && marsState ? (
+            <PreLaunchPanel
+              ship={telemetry}
+              earth={earthState}
+              mars={marsState}
+              plan={plan}
+              accel={accel}
+              accelIsLive={accelIsLive}
+              alignWindow={alignWindow}
+              burnPoint={burnPoint}
+              scanState={scanState}
+              fcState={fcState}
+            />
+          ) : (phase === "burn" || phase === "retro") && lockedPlan && telemetry ? (
             <BurnPanel
               ship={telemetry}
-              plan={plan}
-              flipTimeSec={flipTimeRef.current}
+              plan={lockedPlan}
               postFlip={postFlip}
               accel={accel}
               accelIsLive={accelIsLive}
               fcState={fcState}
             />
-          ) : telemetry && earthState && marsState ? (
-            <PreLaunchPanel
-              ship={telemetry}
-              earth={earthState}
-              mars={marsState}
-              alignWindow={alignWindow}
-              burnPoint={burnPoint}
-              scanState={scanState}
-            />
           ) : (
             <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center">
-              <text fg={C.dim}>Loading vehicle and planet data…</text>
+              <text fg={C.dim}>
+                {phase === "pre" ? "Loading vehicle and planet data…" : "No locked plan — switch to PRE-BURN first to calculate."}
+              </text>
             </box>
           )}
 
-          <FooterBar telemetry={telemetry} error={error} />
+          <FooterBar telemetry={telemetry} error={error} autoControl={autoControl} />
         </>
       )}
     </box>

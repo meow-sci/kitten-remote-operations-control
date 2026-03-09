@@ -47,11 +47,11 @@ public static class GetFlightComputerState
                         BurnMode: fc.BurnMode.ToString(),
                         Profile: profile,
                         CustomRollRad: custom.X,
-                        CustomYawRad: custom.Y,
-                        CustomPitchRad: custom.Z,
+                        CustomYawRad: custom.Z,
+                        CustomPitchRad: custom.Y,
                         ErrorRollDeg: errors.X * (180.0 / Math.PI),
-                        ErrorYawDeg: errors.Y * (180.0 / Math.PI),
-                        ErrorPitchDeg: errors.Z * (180.0 / Math.PI),
+                        ErrorYawDeg: errors.Z * (180.0 / Math.PI),
+                        ErrorPitchDeg: errors.Y * (180.0 / Math.PI),
                         AngleDeadbandDeg: fc.AngleDeadband * (180.0 / Math.PI),
                         RateLimitDegPerSec: fc.RateLimit * (180.0 / Math.PI)
                     );

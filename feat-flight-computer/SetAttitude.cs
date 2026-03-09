@@ -24,6 +24,8 @@ namespace KROC.FeatFlightComputer;
 ///
 /// Euler order for all frames except EnuBody is Roll-Yaw-Pitch.
 /// EnuBody uses Roll-Pitch-Yaw.
+///
+/// The double3 components are: X = roll, Y = pitch, Z = yaw.
 /// </summary>
 public static class SetAttitude
 {
@@ -56,7 +58,7 @@ public static class SetAttitude
                         fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
                         fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
                         fc.AttitudeFrame = capturedFrame;
-                        fc.CustomAttitudeTarget = new double3(body.Roll, body.Yaw, body.Pitch);
+                        fc.CustomAttitudeTarget = new double3(body.Roll, body.Pitch, body.Yaw);
 
                         return new
                         {
