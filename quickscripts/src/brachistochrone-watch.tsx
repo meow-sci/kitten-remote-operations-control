@@ -705,8 +705,9 @@ function Section({
       titleAlignment="left"
       padding={1}
       flexDirection="column"
-      gap={1}
+      gap={0}
       flexGrow={flexGrow}
+
     >
       {children}
     </box>
@@ -855,6 +856,7 @@ function BurnPanel({
   accelIsLive,
   parentBody,
   fcState,
+  showDebug,
 }: {
   ship: TelemetryData;
   plan: BrachistochronePlan;
@@ -863,6 +865,7 @@ function BurnPanel({
   accelIsLive: boolean;
   parentBody: BodyStateData | null;
   fcState: FlightComputerState | null;
+  showDebug: boolean;
 }) {
   const activeHeading = postFlip ? plan.retroHeading : plan.burnHeading;
   return (
@@ -879,7 +882,7 @@ function BurnPanel({
           {HOLD_HEADING && <FcSection fcState={fcState} />}
         </box>
       </box>
-      <AttitudeDebugSection heading={activeHeading} headingLabel={postFlip ? "Retro" : "Burn"} plan={plan} telemetry={ship} parentBody={parentBody} fcState={fcState} />
+      {showDebug && <AttitudeDebugSection heading={activeHeading} headingLabel={postFlip ? "Retro" : "Burn"} plan={plan} telemetry={ship} parentBody={parentBody} fcState={fcState} />}
     </box>
   );
 }
@@ -1011,7 +1014,7 @@ function AttitudeDebugSection({
   const expected = headingToEclBodyAngles(heading);
   const spherical = headingToSphericalAngles(heading);
   const targetAngles = eclipticAngles(heading);
-  const burnSafety = analyzeBurnSafety(heading, telemetry, parentBody);
+  // const burnSafety = analyzeBurnSafety(heading, telemetry, parentBody);
   const bodyForwardAngles = telemetry ? eclipticAngles(telemetry.bodyForwardEcl) : null;
   const bodyForwardErrorDeg = telemetry ? angularErrorDeg(telemetry.bodyForwardEcl, heading) : null;
   const thrustAngles = telemetry?.thrustDirectionEcl ? eclipticAngles(telemetry.thrustDirectionEcl) : null;
@@ -1046,82 +1049,22 @@ function AttitudeDebugSection({
 
   return (
     <Section title="ATTITUDE DEBUG" accentColor={C.warn}>
-      <Row label={`${headingLabel} vec:`} value={fmtVec(heading)} valueColor={C.cyan} />
-      <Row label="Target lon/lat:" value={`${targetAngles.lon.toFixed(1)}° / ${targetAngles.lat.toFixed(1)}°`} valueColor={C.accel} />
-      <Row label="Expect ECL:" value={fmtAttitude(expected)} valueColor={C.accel} />
-      <Row label="Spherical ref:" value={fmtAttitude(spherical)} valueColor={C.dim} />
-      {telemetry ? (
-        <>
-          <Row label="Game navball:" value={fmtNavballDigits(telemetry.navballPitchDeg, telemetry.navballYawDeg, telemetry.navballRollDeg)} valueColor={C.cyan} />
-          {derivedNavball?.digits ? (
-            <>
-              <Row
-                label="Plan navball:"
-                value={`${fmtNavballDigits(derivedNavball.digits.pitchDeg, derivedNavball.digits.yawDeg, derivedNavball.digits.rollDeg)}  [${derivedNavball.note}]`}
-                valueColor={derivedNavball.exact ? C.accel : C.warn}
-              />
-              {actualNavball && (
-                <Row
-                  label="Navball delta:"
-                  value={fmtNavballDelta(actualNavball, derivedNavball.digits)}
-                  valueColor={C.warn}
-                />
-              )}
-            </>
-          ) : (
-            <Row label="Plan navball:" value={derivedNavball?.note ?? "deriving…"} valueColor={C.dim} />
-          )}
-          <Row label="Navball frame:" value={telemetry.navballFrame} />
-          <Row label="Parent body:" value={telemetry.parentBodyId} valueColor={C.dim} />
-          <Row label="Body fwd vec:" value={fmtVec(telemetry.bodyForwardEcl)} valueColor={C.value} />
-          {bodyForwardAngles && <Row label="Body lon/lat:" value={`${bodyForwardAngles.lon.toFixed(1)}° / ${bodyForwardAngles.lat.toFixed(1)}°`} valueColor={C.value} />}
-          {bodyForwardErrorDeg !== null && <Row label="Body +X err:" value={bodyForwardErrorDeg.toFixed(2) + "°"} valueColor={bodyForwardErrorDeg > 5 ? C.warn : C.accel} />}
-          {burnSafety && <Row label="Prograde off:" value={burnSafety.progradeAngleDeg.toFixed(1) + "°"} valueColor={burnSafety.progradeAngleDeg > 120 ? C.error : burnSafety.progradeAngleDeg > 45 ? C.warn : C.accel} />}
-          {burnSafety && <Row label="Radial out:" value={`${burnSafety.radialOutComponent >= 0 ? "+" : ""}${burnSafety.radialOutComponent.toFixed(3)}  (${burnSafety.radialOutAngleDeg.toFixed(1)}°)`} valueColor={burnSafety.radialOutComponent < -0.05 ? C.error : C.value} />}
-          {burnSafety?.warning && <Row label="Burn warning:" value={burnSafety.warning} valueColor={C.error} />}
-          {burnAxisErrorDeg !== null && <Row label="Burn-axis err:" value={`${burnAxisErrorDeg.toFixed(2)}°  [${burnAxisSource}]`} valueColor={burnAxisErrorDeg > 5 ? C.warn : C.accel} />}
+      {/* <Row label="Target lon/lat:" value={`${targetAngles.lon.toFixed(1)}° / ${targetAngles.lat.toFixed(1)}°`} valueColor={C.accel} /> */}
+      { telemetry && <>
+                {burnAxisErrorDeg !== null && <Row label="Burn-axis err:" value={`${burnAxisErrorDeg.toFixed(2)}°  [${burnAxisSource}]`} valueColor={burnAxisErrorDeg > 5 ? C.warn : C.accel} />}
           <Row label="Live thrust:" value={fmtForce(telemetry.activeEngineThrustN)} valueColor={telemetry.activeEngineThrustN > 0 ? C.accel : C.dim} />
-          {telemetry.thrustDirectionEcl ? (
-            <>
-              <Row label="Thrust vec:" value={fmtVec(telemetry.thrustDirectionEcl)} valueColor={C.accel} />
-              {thrustAngles && <Row label="Thrust lon/lat:" value={`${thrustAngles.lon.toFixed(1)}° / ${thrustAngles.lat.toFixed(1)}°`} valueColor={C.accel} />}
-              {thrustErrorDeg !== null && <Row label="Thrust err:" value={thrustErrorDeg.toFixed(2) + "°"} valueColor={thrustErrorDeg > 5 ? C.warn : C.accel} />}
-              {bodyToThrustCantDeg !== null && <Row label="Body->thrust cant:" value={bodyToThrustCantDeg.toFixed(2) + "°"} valueColor={bodyToThrustCantDeg > 1 ? C.warn : C.dim} />}
-              <Row label="Exhaust vec:" value={fmtVec(telemetry.exhaustDirectionEcl!)} valueColor={C.dim} />
-              {exhaustAngles && <Row label="Exhaust lon/lat:" value={`${exhaustAngles.lon.toFixed(1)}° / ${exhaustAngles.lat.toFixed(1)}°`} valueColor={C.dim} />}
-            </>
-          ) : (
-            <Row label="Thrust vec:" value="engines not producing thrust" valueColor={C.dim} />
-          )}
-          {accelerationAngles && accelerationErrorDeg !== null ? (
-            <>
-              <Row label="Accel vec:" value={fmtVec(telemetry.accelerationEcl)} valueColor={C.value} />
-              <Row label="Accel lon/lat:" value={`${accelerationAngles.lon.toFixed(1)}° / ${accelerationAngles.lat.toFixed(1)}°`} valueColor={C.value} />
-              <Row label="Accel err:" value={accelerationErrorDeg.toFixed(2) + "°"} valueColor={accelerationErrorDeg > 5 ? C.warn : C.accel} />
-            </>
-          ) : (
-            <Row label="Accel vec:" value="acceleration below noise floor" valueColor={C.dim} />
-          )}
-        </>
-      ) : (
-        <Row label="Game navball:" value="reading telemetry…" valueColor={C.dim} />
-      )}
-      {fcState && fcAngles ? (
-        <>
-          <Row label="FC mode/frame:" value={`${fcState.attitudeMode} / ${fcState.trackTarget} @ ${fcState.frame}`} />
-          <Row label="FC custom:" value={fmtAttitude(fcAngles)} valueColor={C.cyan} />
-          <Row
-            label="FC delta:"
-            value={
-              `P ${fmtSignedDeg(fcAngles.pitchRad - expected.pitchRad)}  ` +
-              `Y ${fmtSignedDeg(fcAngles.yawRad - expected.yawRad)}  ` +
-              `R ${fmtSignedDeg(fcAngles.rollRad - expected.rollRad)}`
-            }
-            valueColor={C.warn}
-          />
-        </>
-      ) : (
-        <Row label="FC custom:" value="reading state…" valueColor={C.dim} />
+
+      </>}
+      {fcState && fcAngles && (
+        <Row
+          label="FC delta:"
+          value={
+            `P ${fmtSignedDeg(fcAngles.pitchRad - expected.pitchRad)}  ` +
+            `Y ${fmtSignedDeg(fcAngles.yawRad - expected.yawRad)}  ` +
+            `R ${fmtSignedDeg(fcAngles.rollRad - expected.rollRad)}`
+          }
+          valueColor={C.warn}
+        />
       )}
     </Section>
   );
@@ -1141,7 +1084,7 @@ function ScanStatusSection({ scanState }: { scanState: ScanState }) {
       title=" ALIGNMENT SCAN "
       titleAlignment="left"
       paddingX={1}
-      paddingY={1}
+      paddingY={0}
       flexDirection="row"
       alignItems="center"
       gap={2}
@@ -1178,6 +1121,7 @@ function PreLaunchPanel({
   scanState,
   parentBody,
   fcState,
+  showDebug,
 }: {
   ship: TelemetryData;
   earth: BodyStateData;
@@ -1190,6 +1134,7 @@ function PreLaunchPanel({
   scanState: ScanState;
   parentBody: BodyStateData | null;
   fcState: FlightComputerState | null;
+  showDebug: boolean;
 }) {
   return (
     <box flexDirection="column" flexGrow={1} gap={1} padding={1}>
@@ -1200,7 +1145,7 @@ function PreLaunchPanel({
         <OrbitalBurnSection burnPoint={burnPoint} />
       </box>
       <ScanStatusSection scanState={scanState} />
-      <AttitudeDebugSection heading={plan?.burnHeading ?? ship.bodyForwardEcl} headingLabel="Plan" plan={plan} telemetry={ship} parentBody={parentBody} fcState={fcState} />
+      {showDebug && <AttitudeDebugSection heading={plan?.burnHeading ?? ship.bodyForwardEcl} headingLabel="Plan" plan={plan} telemetry={ship} parentBody={parentBody} fcState={fcState} />}
       <text fg={C.dim} paddingX={1}>
         Switch to BURN phase when ready to commit. Plan is locked on phase entry.
       </text>
@@ -1279,10 +1224,12 @@ function FooterBar({
   telemetry,
   error,
   autoControl,
+  showDebug,
 }: {
   telemetry: TelemetryData | null;
   error: string | null;
   autoControl: boolean;
+  showDebug: boolean;
 }) {
   const hasAutoFeatures = HOLD_HEADING || !!VEHICLE_ID;
   return (
@@ -1314,6 +1261,12 @@ function FooterBar({
           </span>
         </text>
       )}
+      <text>
+        <span fg={C.dim}>[D] DEBUG </span>
+        <span fg={showDebug ? C.cyan : C.dim}>
+          <strong>{showDebug ? "ON" : "OFF"}</strong>
+        </span>
+      </text>
       <text fg={C.dim}>ESC to quit</text>
     </box>
   );
@@ -1353,6 +1306,7 @@ function App() {
   const phaseRef = useRef<Phase>("pre");
   const alignWindowRef = useRef<AlignmentWindow | null>(null);
   const autoControlRef = useRef(false);
+  const showDebugRef = useRef(true);
   const planRef = useRef<BrachistochronePlan | null>(null);
   const lockedPlanRef = useRef<BrachistochronePlan | null>(null);
 
@@ -1371,6 +1325,7 @@ function App() {
   const [scanState, setScanState] = useState<ScanState>({ running: true, progress: 0, nextRefreshMs: 0 });
   const [fcState, setFcState] = useState<FlightComputerState | null>(null);
   const [autoControl, setAutoControl] = useState(false);
+  const [showDebug, setShowDebug] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [startupDone, setStartupDone] = useState(false);
 
@@ -1406,6 +1361,11 @@ function App() {
       const next = !autoControlRef.current;
       autoControlRef.current = next;
       setAutoControl(next);
+    }
+    if (key.name === "d") {
+      const next = !showDebugRef.current;
+      showDebugRef.current = next;
+      setShowDebug(next);
     }
   });
 
@@ -1598,6 +1558,7 @@ function App() {
               scanState={scanState}
               parentBody={parentBodyState}
               fcState={fcState}
+              showDebug={showDebug}
             />
           ) : (phase === "burn" || phase === "retro") && lockedPlan && telemetry ? (
             <BurnPanel
@@ -1608,6 +1569,7 @@ function App() {
               accelIsLive={accelIsLive}
               parentBody={parentBodyState}
               fcState={fcState}
+              showDebug={showDebug}
             />
           ) : (
             <box flexDirection="column" flexGrow={1} justifyContent="center" alignItems="center">
@@ -1617,7 +1579,7 @@ function App() {
             </box>
           )}
 
-          <FooterBar telemetry={telemetry} error={error} autoControl={autoControl} />
+          <FooterBar telemetry={telemetry} error={error} autoControl={autoControl} showDebug={showDebug} />
         </>
       )}
     </box>
