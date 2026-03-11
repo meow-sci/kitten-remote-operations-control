@@ -79,8 +79,8 @@ public class Mod
       if (ImGui.IsKeyPressed(ImGuiKey.F11))
         _windowVisible = !_windowVisible;
 
-      if (_windowVisible)
-        RenderWindow();
+      // if (_windowVisible)
+      //   RenderWindow();
     }
     catch (Exception ex)
     {
